@@ -197,17 +197,17 @@
   :custom
   (markdown-command "/usr/bin/pandoc"))
 
-;; LaTeX
-(setq TeX-auto-save t)
-(setq TeX-parse-self t)
-(setq-default TeX-master nil)
-(add-hook 'LaTeX-mode-hook (lambda()
-                             ;; 设置编译引擎为 XeTeX
-                             (setq TeX-global-PDF-mode t TeX-engine 'xetex)
-                             ;; 使用XeLaTeX作为默认程序来编译LaTeX
-                             (add-to-list 'TeX-command-list '("XeLaTeX" "%'xelatex%(mode)%' %t"TeX-run-TeX nil t))
-                             (setq TeX-command-default "XeLaTeX")
-                             ))
+;; LaTeX not used now
+;; (setq TeX-auto-save t)
+;; (setq TeX-parse-self t)
+;; (setq-default TeX-master nil)
+;; (add-hook 'LaTeX-mode-hook (lambda()
+;;                              ;; 设置编译引擎为 XeTeX
+;;                              (setq TeX-global-PDF-mode t TeX-engine 'xetex)
+;;                              ;; 使用XeLaTeX作为默认程序来编译LaTeX
+;;                              (add-to-list 'TeX-command-list '("XeLaTeX" "%'xelatex%(mode)%' %t"TeX-run-TeX nil t))
+;;                              (setq TeX-command-default "XeLaTeX")
+;;                              ))
 
 ;; web-mode
 (use-package web-mode

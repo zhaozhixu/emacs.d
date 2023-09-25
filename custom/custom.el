@@ -65,8 +65,7 @@
  '(lsp-file-watch-ignored-files
    '("[/\\\\]flycheck_[^/\\\\]+\\'" "[/\\\\]\\.#[^/\\\\]+\\'" "[/\\\\][^/\\\\]+~\\'" "[/\\\\][^/\\\\]+.bak\\'" "[/\\\\][^/\\\\]+.o\\'" "[/\\\\][^/\\\\]+.a\\'" "[/\\\\][^/\\\\]+.so\\'" "[/\\\\][^/\\\\]+.onnx\\'" "[/\\\\][^/\\\\]+.trt\\'"))
  '(org-agenda-files '("~/org-note/Agenda.org"))
- '(package-selected-packages
-   '(leetcode csv-mode vterm lsp-pyright lsp-ui dockerfile-mode thrift lsp-go w3m lsp-treemacs flutter use-package hover flycheck lsp-java lsp-mode go-mode paren-face magit rjsx-mode company-ycmd jsx-mode yaml-mode window-number markdown-mode cmake-mode haskell-mode opencl-mode protobuf-mode bison-mode google-c-style company-c-headers helm matlab-mode sr-speedbar auctex zygospore yasnippet ws-butler web-mode volatile-highlights undo-tree smartparens iedit helm-swoop helm-projectile duplicate-thing dtrt-indent company comment-dwim-2 clean-aindent-mode anzu))
+ '(package-selected-packages '(vterm paren-face))
  '(project-linux-architecture-default "x86")
  '(project-linux-build-directory-default 'same)
  '(speedbar-supported-extension-expressions

@@ -67,6 +67,7 @@
     markdown-mode
     cmake-mode
     sr-speedbar
+    bison-mode
     ))
 
 (defun install-packages ()
