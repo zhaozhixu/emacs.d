@@ -1,0 +1,7 @@
+*
+README
+!init.el
+!custom
+!custom/*.el
+custom/lsd-mode.el
+!.gitignore
