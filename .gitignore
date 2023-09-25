@@ -3,5 +3,7 @@
 !init.el
 !custom
 !custom/*.el
+!custom/unused
+!custom/unused/*.el
 custom/lsd-mode.el
 !.gitignore
