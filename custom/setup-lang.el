@@ -190,7 +190,7 @@
   ;; (require 'ox-latex)
   ;; (add-to-list 'org-latex-packages-alist '("" "minted"))
   ;; (setq org-latex-listings 'minted)
-)
+  )
 
 ;; Markdown
 (use-package markdown-mode

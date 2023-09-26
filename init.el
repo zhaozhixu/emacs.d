@@ -2,11 +2,11 @@
 
 (let ((pkg-official
        '(("melpa" . "https://melpa.org/packages/")
-	     ("gnu"   . "https://elpa.gnu.org/packages/")
+         ("gnu"   . "https://elpa.gnu.org/packages/")
          ("nongnu" . "https://elpa.nongnu.org/nongnu/")))
       (pkg-tuna
        '(("gnu"   . "http://mirrors.tuna.tsinghua.edu.cn/elpa/gnu/")
-		 ("nongnu"   . "http://mirrors.tuna.tsinghua.edu.cn/elpa/nongnu/")
+         ("nongnu"   . "http://mirrors.tuna.tsinghua.edu.cn/elpa/nongnu/")
          ("melpa" . "http://mirrors.tuna.tsinghua.edu.cn/elpa/melpa/")))
       (pkg-emacs-china
        '(("gnu"   . "http://elpa.emacs-china.org/gnu/")
@@ -94,9 +94,6 @@
 (require 'setup-lang)
 (require 'setup-misc)
 (require 'setup-mu4e)
-;; (require 'setup-helm-gtags)
-;; (require 'setup-ggtags)
-;; (require 'setup-cedet)
 
 (setq custom-file "~/.emacs.d/custom/custom.el")
 (load custom-file)
