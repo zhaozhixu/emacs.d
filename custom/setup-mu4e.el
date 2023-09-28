@@ -24,8 +24,8 @@
      ("date:today..now"                                 "Today's messages"       ?t)
      ("date:7d..now"                                    "Last 7 days"            ?w)
      ("date:1d..now"                                    "Last 1 days"            ?d)
-     ("date:1d..now AND NOT list:vger.kernel.org"       "Last 1 days (others)"   ?o)
-     ("date:1d..now AND list:vger.kernel.org"           "Last 1 days (kernel)"   ?k)
+     ("date:1d..now AND NOT maildir:/Foxmail/kernel"    "Last 1 days (others)"   ?o)
+     ("date:1d..now AND maildir:/Foxmail/kernel"        "Last 1 days (kernel)"   ?k)
      ("maildir:/Foxmail/INBOX"                          "INBOX"                  ?i)
      ("maildir:/Foxmail/Sent Messages"                  "Sent Messages"          ?s)
      ("mime:image/*"                                    "Messages with images"   ?p)))
@@ -38,7 +38,8 @@
    '(("/Foxmail/INBOX"          . ?i)
      ("/Foxmail/Sent Messages"  . ?s)
      ("/Foxmail/Local Drafts"   . ?d)
-     ("/Foxmail/Archive"        . ?a)))
+     ("/Foxmail/Archive"        . ?a)
+     ("/Foxmail/kernel"         . ?k)))
 
   ;; allow for updating mail using 'U' in the main view:
   ;; See ~/.offlineimaprc for config.
@@ -93,5 +94,14 @@
   (smtpmail-smtp-service 465)
   (smtpmail-debug-info t)
   (smtpmail-debug-verb t))
+
+(use-package message-view-patch
+  :after (mu4e)
+  :hook
+  (gnus-part-display . message-view-patch-highlight)
+  ;; :custom-face ; FIXME: doesn't work
+  ;; (message-view-patch-commit-comment ((t nil)))
+  ;; (message-view-patch-commit-message ((t nil)))
+  )
 
 (provide 'setup-mu4e)

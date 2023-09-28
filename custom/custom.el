@@ -78,5 +78,7 @@
  ;; Your init file should contain only one such instance.
  ;; If there is more than one, they won't work right.
  '(default ((t (:family "DejaVu Sans Mono" :foundry "PfEd" :slant normal :weight normal :height 102 :width normal))))
- '(header-line ((t (:inherit mode-line :background "grey20" :foreground "grey90" :inverse-video nil :underline t)))))
+ '(header-line ((t (:inherit mode-line :background "grey20" :foreground "grey90" :inverse-video nil :underline t))))
+ '(message-view-patch-commit-comment ((t nil)))
+ '(message-view-patch-commit-message ((t nil))))
 (set-background-color "black")

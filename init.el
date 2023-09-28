@@ -68,6 +68,7 @@
     cmake-mode
     sr-speedbar
     bison-mode
+    message-view-patch
     ))
 
 (defun install-packages ()

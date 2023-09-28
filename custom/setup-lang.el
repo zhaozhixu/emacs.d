@@ -112,9 +112,7 @@
             (let ((filename (buffer-file-name)))
               (when (and filename
                          (or (string-match "onnxruntime/" filename)))
-                (c-set-style "google")
-                ))
-            google-set-c-style))
+                (c-set-style "google")))))
 (add-to-list 'auto-mode-alist '("\\.h\\'" . c++-mode))
 (add-to-list 'auto-mode-alist '("\\.cu\\'" . c++-mode))
 
@@ -213,6 +211,7 @@
 (use-package web-mode
   :mode ("\\.phtml\\'" "\\.tpl\\'" "\\.php\\'" "\\.ctp\\'" "\\.[agj]sp\\'" "\\.as[cp]x\\'"
          "\\.erb\\'" "\\.mustache\\'" "\\.djhtml\\'" "\\.js\\'" "\\.html?\\'"))
+(add-to-list 'auto-mode-alist '("\\.pac\\'" . js-mode))
 
 ;; Racket
 (use-package racket-mode
