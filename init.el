@@ -59,7 +59,7 @@
     hydra
     avy
     which-key
-    helm-xref
+    ;; helm-xref
     dap-mode
     leetcode
     csv-mode

@@ -80,5 +80,6 @@
  '(default ((t (:family "DejaVu Sans Mono" :foundry "PfEd" :slant normal :weight normal :height 102 :width normal))))
  '(header-line ((t (:inherit mode-line :background "grey20" :foreground "grey90" :inverse-video nil :underline t))))
  '(message-view-patch-commit-comment ((t nil)))
- '(message-view-patch-commit-message ((t nil))))
+ '(message-view-patch-commit-message ((t nil)))
+ '(racket-xp-unused-face ((t nil))))
 (set-background-color "black")

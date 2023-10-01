@@ -3,7 +3,7 @@
 ;; lsp-mode
 ;; sample `helm' configuration use https://github.com/emacs-helm/helm/ for details
 (helm-mode)
-(require 'helm-xref)
+;; (require 'helm-xref)
 (define-key global-map [remap find-file] #'helm-find-files)
 (define-key global-map [remap execute-extended-command] #'helm-M-x)
 (define-key global-map [remap switch-to-buffer] #'helm-mini)
@@ -117,18 +117,14 @@
 (add-to-list 'auto-mode-alist '("\\.cu\\'" . c++-mode))
 
 ;; Python
-(use-package lsp-pyright
-  :ensure t
-  :mode ("\\.py\\'" "\\BUILD\\'")
-  :hook (python-mode . (lambda ()
-                         (require 'lsp-pyright)
-                         (lsp-deferred)
-                         (setq lsp-ui-doc-enable nil)))
-  :init
-  (setq lsp-pyright-python-executable-cmd "python3")
-  (setq lsp-file-watch-threshold 200000)
-  (add-to-list 'lsp-file-watch-ignored-directories "[/\\\\]\\workspace/test\\'")
-  )
+(add-hook 'python-mode-hook
+          (lambda ()
+            (lsp-deferred)
+            (setq lsp-pyright-python-executable-cmd "python3"
+                  lsp-file-watch-threshold 200000
+                  lsp-ui-doc-enable nil)
+            (add-to-list 'lsp-file-watch-ignored-directories "[/\\\\]\\workspace/test\\'")))
+(add-to-list 'auto-mode-alist '("\\BUILD\\'" . python-mode))
 
 ;; Go
 (use-package lsp-go
@@ -219,11 +215,14 @@
   :config
   (require 'racket-xp)
   (add-hook 'racket-mode-hook #'racket-xp-mode)
-  (add-hook 'racket-xp-mode-hook
-            (lambda ()
-              (remove-hook 'pre-redisplay-functions
-                           #'racket-xp-pre-redisplay
-                           t))))
+  (flycheck-mode)
+  ;; (add-hook 'racket-xp-mode-hook
+  ;;           (lambda ()
+  ;;             (remove-hook 'pre-redisplay-functions
+  ;;                          #'racket-xp-pre-redisplay
+  ;;                          t)))
+  :custom
+  (racket-show-functions '(racket-show-echo-area)))
 ;; (add-hook 'racket-mode-hook 'lsp-deferred)
 
 ;; other
