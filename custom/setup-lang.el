@@ -216,6 +216,14 @@
   (require 'racket-xp)
   (add-hook 'racket-mode-hook #'racket-xp-mode)
   (flycheck-mode)
+  ;; (defun my-hook (module-language)
+  ;;   (let ((use-at-exp
+  ;;          (member module-language
+  ;;                  (list "at-exp"))))
+  ;;     (if use-at-exp
+  ;;         (paredit-mode 1)
+  ;;       (paredit-mode -1))))
+  ;; (add-hook 'racket-hash-lang-module-language-hook #'my-hook)
   ;; (add-hook 'racket-xp-mode-hook
   ;;           (lambda ()
   ;;             (remove-hook 'pre-redisplay-functions
@@ -224,6 +232,27 @@
   :custom
   (racket-show-functions '(racket-show-echo-area)))
 ;; (add-hook 'racket-mode-hook 'lsp-deferred)
+
+;; (global-paren-face-mode t)
+(require 'racket-hash-lang)
+;; (add-to-list 'auto-mode-alist '("\\.rkt\\'" . racket-hash-lang-mode))
+(add-to-list 'auto-mode-alist '("\\.scrbl\\'" . racket-hash-lang-mode))
+(add-to-list 'auto-mode-alist '("\\.rhm\\'" . racket-hash-lang-mode))
+(require 'racket-xp)
+(require 'racket-font-lock)
+(add-hook 'racket-hash-lang-mode-hook (lambda ()
+                                        (racket-xp-mode)
+                                        (setq-local racket-xp-add-binding-faces t)
+                                        (paren-face-mode)
+                                        (flycheck-mode)
+                                            (font-lock-add-keywords nil
+                                                                    (append racket-font-lock-keywords-2
+                                                                            racket-font-lock-keywords-3))
+                                          (font-lock-remove-keywords nil
+                                                                     (append racket-font-lock-keywords-2
+                                                                             racket-font-lock-keywords-3))))
+;; (setq-local racket-xp-add-binding-faces t)
+;; (flycheck-mode)
 
 ;; other
 ;; (use-package lsp-dart

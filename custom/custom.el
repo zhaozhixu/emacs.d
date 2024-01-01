@@ -65,7 +65,7 @@
  '(lsp-file-watch-ignored-files
    '("[/\\\\]flycheck_[^/\\\\]+\\'" "[/\\\\]\\.#[^/\\\\]+\\'" "[/\\\\][^/\\\\]+~\\'" "[/\\\\][^/\\\\]+.bak\\'" "[/\\\\][^/\\\\]+.o\\'" "[/\\\\][^/\\\\]+.a\\'" "[/\\\\][^/\\\\]+.so\\'" "[/\\\\][^/\\\\]+.onnx\\'" "[/\\\\][^/\\\\]+.trt\\'"))
  '(org-agenda-files '("~/org-note/Agenda.org"))
- '(package-selected-packages '(vterm paren-face))
+ '(package-selected-packages '(racket-mode scala-mode vterm paren-face))
  '(project-linux-architecture-default "x86")
  '(project-linux-build-directory-default 'same)
  '(speedbar-supported-extension-expressions
