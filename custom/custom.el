@@ -68,6 +68,7 @@
  '(package-selected-packages '(vterm paren-face))
  '(project-linux-architecture-default "x86")
  '(project-linux-build-directory-default 'same)
+ '(safe-local-variable-values '((encoding . utf-8)))
  '(speedbar-supported-extension-expressions
    '(".org" ".[ch]\\(\\+\\+\\|pp\\|c\\|h\\|xx\\)?" ".tex\\(i\\(nfo\\)?\\)?" ".el" ".emacs" ".l" ".lsp" ".p" ".java" ".js" ".f\\(90\\|77\\|or\\)?" ".ad[abs]" ".p[lm]" ".tcl" ".m" ".scm" ".pm" ".py" ".g" ".s?html" ".ma?k" "[Mm]akefile\\(\\.in\\)?" ".php" ".ctp" ".sql"))
  '(tool-bar-mode nil))

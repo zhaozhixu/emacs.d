@@ -81,7 +81,8 @@
 
 ;; Package: undo-tree
 ;; GROUP: Editing -> Undo -> Undo Tree
-(require 'undo-tree)
+(use-package undo-tree
+  :diminish undo-tree-mode)
 (global-undo-tree-mode)
 
 ;; Package: yasnippet
@@ -144,7 +145,8 @@
 
 ;; PACKAGE: anzu
 ;; GROUP: Editing -> Matching -> Isearch -> Anzu
-(require 'anzu)
+(use-package anzu
+  :diminish anzu-mode)
 (global-anzu-mode)
 (global-set-key (kbd "M-%") 'anzu-query-replace)
 (global-set-key (kbd "C-M-%") 'anzu-query-replace-regexp)

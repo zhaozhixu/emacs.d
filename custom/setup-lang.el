@@ -20,7 +20,16 @@
 (with-eval-after-load 'lsp-mode
   (add-hook 'lsp-mode-hook #'lsp-enable-which-key-integration)
   (require 'dap-cpptools)
-  (yas-global-mode))
+  ;; (yas-global-mode)
+  ;; lsp seems to ring bells too often
+  (setq ring-bell-function
+        (lambda ()
+	      (if (memq this-command
+		            '(isearch-abort abort-recursive-edit keyboard-quit))
+	        (ding))))
+  ;; lsp seems to use this func even when no X
+  (if (not (boundp 'x-hide-tip))
+      (defun x-hide-tip () nil)))
 
 (my/global-map-and-set-key "C-:" 'lsp-toggle-symbol-highlight)
 (my/global-map-and-set-key "C-." 'lsp-format-buffer)

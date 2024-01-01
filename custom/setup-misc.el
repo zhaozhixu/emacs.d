@@ -63,6 +63,7 @@
 
 ;; Package: company
 (use-package company
+  :diminish company-mode
   :hook (after-init . global-company-mode))
 
 ;; Package: window-number
@@ -136,5 +137,10 @@ Operate on selected region on whole buffer."
   (interactive)
   (lsp-workspace-restart)
   (yas-minor-mode-on))
+
+(diminish 'eldoc-mode)
+(diminish 'abbrev-mode)
+(setq flycheck-mode-line nil)
+(add-hook 'hs-minor-mode-hook (lambda () (diminish 'hs-minor-mode)))
 
 (provide 'setup-misc)

@@ -92,5 +92,6 @@
 (setq helm-swoop-speed-or-color t)
 
 (helm-mode 1)
+(diminish 'helm-mode)
 
 (provide 'setup-helm)
