@@ -10,11 +10,13 @@
 
 (setq read-process-output-max (* 1024 1024)
       treemacs-space-between-root-nodes nil
-      company-idle-delay 0.0
+      company-idle-delay 0.2
       company-minimum-prefix-length 1
       lsp-idle-delay 0.1
       lsp-headerline-breadcrumb-enable t
       lsp-enable-symbol-highlighting nil
+      lsp-lens-mode 0
+      backup-by-copying t ;; or some imported paths will change to backup file
       )
 
 (with-eval-after-load 'lsp-mode
@@ -33,9 +35,24 @@
 
 (my/global-map-and-set-key "C-:" 'lsp-toggle-symbol-highlight)
 (my/global-map-and-set-key "C-." 'lsp-format-buffer)
+(my/global-map-and-set-key "M-p" 'lsp-execute-code-action)
+(my/global-map-and-set-key "M-I" 'lsp-ui-doc-glance)
 
 (use-package lsp-ui
   :ensure t)
+
+(use-package tree-sitter
+  :ensure t
+  :config
+  ;; activate tree-sitter on any buffer containing code for which it has a parser available
+  (global-tree-sitter-mode)
+  ;; you can easily see the difference tree-sitter-hl-mode makes for python, ts or tsx
+  ;; by switching on and off
+  (add-hook 'tree-sitter-after-on-hook #'tree-sitter-hl-mode))
+
+(use-package tree-sitter-langs
+  :ensure t
+  :after tree-sitter)
 
 ;; C
 (defun c-lineup-arglist-tabs-only (ignored)
@@ -52,7 +69,7 @@
             (setq
              lsp-clients-clangd-args '("-j=4" "-background-index" "-log=error" "--header-insertion=never"
                                        "--enable-config" "--compile-commands-dir=build")
-             lsp-ui-doc-enable nil
+             ;; lsp-ui-doc-enable nil
              ;; lsp-ui-peek-enable nil
              ;; lsp-ui-sideline-enable nil
              ;; lsp-ui-imenu-enable nil
@@ -126,12 +143,22 @@
 (add-to-list 'auto-mode-alist '("\\.cu\\'" . c++-mode))
 
 ;; Python
+(use-package pyvenv
+  :ensure t
+  :defer t
+  :diminish
+  :config
+  ;; (setenv "WORKON_HOME" <your-pyworkon-venvs-folder>)
+  (setq pyvenv-mode-line-indicator '(pyvenv-virtual-env-name ("[venv:" pyvenv-virtual-env-name "] ")))
+  (pyvenv-mode t))
+
 (add-hook 'python-mode-hook
           (lambda ()
             (lsp-deferred)
             (setq lsp-pyright-python-executable-cmd "python3"
                   lsp-file-watch-threshold 200000
-                  lsp-ui-doc-enable nil)
+                  ;; lsp-ui-doc-enable nil
+                  )
             (add-to-list 'lsp-file-watch-ignored-directories "[/\\\\]\\workspace/test\\'")))
 (add-to-list 'auto-mode-alist '("\\BUILD\\'" . python-mode))
 
@@ -215,7 +242,7 @@
 ;; web-mode
 (use-package web-mode
   :mode ("\\.phtml\\'" "\\.tpl\\'" "\\.php\\'" "\\.ctp\\'" "\\.[agj]sp\\'" "\\.as[cp]x\\'"
-         "\\.erb\\'" "\\.mustache\\'" "\\.djhtml\\'" "\\.js\\'" "\\.html?\\'"))
+         "\\.erb\\'" "\\.mustache\\'" "\\.djhtml\\'" "\\.html?\\'"))
 (add-to-list 'auto-mode-alist '("\\.pac\\'" . js-mode))
 
 ;; Racket
@@ -234,9 +261,88 @@
   (racket-show-functions '(racket-show-echo-area)))
 ;; (add-hook 'racket-mode-hook 'lsp-deferred)
 
-;; other
-;; (use-package lsp-dart
-;;              :ensure t
-;;              :hook (dart-mode . lsp))
+;; Dart & flutter
+(use-package lsp-dart
+  :ensure t
+  :hook (dart-mode . (lambda ()
+                       (lsp-deferred)
+                       (setq
+                        ;; lsp-ui-doc-enable nil
+                        lsp-ui-doc-show-with-mouse nil
+                        )
+                       ;; workaround lsp-dart doesn't company after '.'
+                       (advice-add 'lsp-completion--looking-back-trigger-characterp :around
+                                   (defun lsp-completion--looking-back-trigger-characterp@fix-dart-trigger-characters (orig-fn trigger-characters)
+                                     (funcall orig-fn
+                                              (if (and (derived-mode-p 'dart-mode) (not trigger-characters))
+                                                  ["." "=" "(" "$"]
+                                                trigger-characters))))
+                       (flutter-test-mode))))
+
+(defun my-flutter-build-run-watch ()
+  "Run `flutter pub run build_watch build`."
+  (interactive)
+  (flutter--from-project-root
+   (let* ((buffer-name "*Flutter-build-runner-watch*")
+          (buffer (flutter--get-buffer-create buffer-name))
+          (alive (comint-check-proc buffer-name)))
+     (unless alive
+       (apply #'make-comint-in-buffer "Flutter-build-runner-watch" buffer (flutter-build-command) nil '("pub" "run" "build_runner" "watch"))
+       (display-buffer buffer)))))
+
+(defun my-flutter-run-or-hot-reload ()
+  "Run 'flutter run' or perform a hot reload, and open the *Flutter* buffer."
+  (interactive)
+  (my-flutter-build-run-watch)
+  (flutter-run-or-hot-reload)
+  ;; (switch-to-buffer-other-window "*Flutter*")
+  (display-buffer-and-append-if-not-visible flutter-buffer-name))
+
+(defun my-flutter-delete-flutter-window ()
+  (interactive)
+  (delete-window-by-buffer-name "*Flutter*"))
+
+(use-package flutter
+  :ensure t
+  :after dart-mode
+  :bind (:map dart-mode-map
+              ("C-M-x" . #'my-flutter-run-or-hot-reload)
+              ("C-M-c" . #'my-flutter-delete-flutter-window))
+  :custom (flutter-sdk-path "/Users/shuhao/workspace/flutter"))
+
+;; Rust
+(add-hook 'rust-mode-hook (lambda ()
+                            (lsp-deferred)
+                            (setq lsp-rust-analyzer-lens-enable nil)))
+
+;; Typescript
+;; Have to manully install treesit library to get syntax highlight work:
+;; (setq treesit-language-source-alist
+;;       '((typescript "https://github.com/tree-sitter/tree-sitter-typescript" "master" "typescript/src")
+;;         (tsx "https://github.com/tree-sitter/tree-sitter-typescript" "master" "tsx/src")))
+;; (mapc #'treesit-install-language-grammar (mapcar #'car treesit-language-source-alist))
+
+;; May encounter: Error processing message (error "The package typescript is not installed.  Unable to find nil").
+;; Have to install ts-ls server to workaround this problem:
+;; M-x lsp-install-server ts-ls
+
+(use-package lsp-mode
+  :ensure t
+  :custom
+  (lsp-disabled-clients '(ts-ls))
+  :hook ((typescript-mode . lsp-deferred)
+         (typescript-ts-mode . lsp-deferred)
+         (js-mode . lsp-deferred)
+         (js2-mode . lsp-deferred))
+  )
+
+;; SQL
+(add-hook 'sql-mode-hook
+          (lambda ()
+            (sql-set-product "postgres")))
+(use-package sql-indent
+  :ensure t
+  :after sql
+  :hook (sql-mode . sqlind-minor-mode))
 
 (provide 'setup-lang)

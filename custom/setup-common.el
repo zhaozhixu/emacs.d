@@ -5,14 +5,16 @@
 (defalias 'ed 'eval-defun)
 (defalias 'wsm 'whitespace-mode)
 
-(setq gc-cons-threshold (* 100 1024 1024)
+(setq gc-cons-threshold (* 1024 1024 1024)
       inhibit-startup-message t
       cjk-font-size 30
       ansi-font-size 30
       system-uses-terminfo nil
       term-buffer-maximum-size 81920
       tool-bar-mode nil
+      tooltip-mode -1
       warning-suppress-types '((emacs)))
+(run-with-idle-timer 2 t (lambda () (garbage-collect)))
 
 (defun set-exec-path-from-shell-PATH ()
   "Set up Emacs' `exec-path' and PATH environment variable to match
@@ -46,7 +48,9 @@ apps are not started from a shell."
 
 (defun my/map-key (key)
   "Map KEY from escape sequence \"\e[emacs-KEY.\""
-  (define-key function-key-map (concat "\e[emacs-" key) (kbd key)))
+  (define-key function-key-map (concat "\e[emacs-" key "]") (kbd key)))
+
+(my/global-map-and-set-key "C-;" 'iedit-mode)
 
 (defun uname-r ()
   "Return shell command result of 'uname -r'"
@@ -61,5 +65,27 @@ apps are not started from a shell."
     ;; (substring ret-string 0 (- (length ret-string) 1))
     (replace-regexp-in-string "\n" "" ret-string)
     ))
+
+(defun delete-window-by-buffer-name (buffer-name)
+  "Delete the window displaying the buffer with the given name."
+  (let ((buffer (get-buffer buffer-name)))
+    (if buffer
+        (let ((window (get-buffer-window buffer t)))
+          (if window
+              (delete-window window)
+            (message "No window found displaying buffer: %s" buffer-name)))
+      (message "No buffer found with name: %s" buffer-name))))
+
+(defun display-buffer-and-append-if-not-visible (buffer-or-name)
+  "Display buffer at the bottom of the frame and move cursor to the end,
+   but only if the buffer is not already visible in any window."
+  (interactive "bBuffer to display: ")
+  (let* ((buffer (get-buffer-create buffer-or-name))
+         (window (or (get-buffer-window buffer t) (display-buffer buffer))))
+    (with-current-buffer buffer
+      (goto-char (point-max))
+      (if window
+          (set-window-point window (point-max))))))
+
 
 (provide 'setup-common)

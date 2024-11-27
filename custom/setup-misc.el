@@ -143,4 +143,26 @@ Operate on selected region on whole buffer."
 (setq flycheck-mode-line nil)
 (add-hook 'hs-minor-mode-hook (lambda () (diminish 'hs-minor-mode)))
 
+(if (not (version< emacs-version "29"))
+    (pixel-scroll-precision-mode))
+
+;; WSL clipboard fix
+(setq interprogram-cut-function
+      (lambda (text)
+        (with-temp-buffer
+          (insert text)
+          (call-process-region (point-min) (point-max) "win32yank.exe" nil 0 nil "-i" "--crlf"))))
+;; (setq interprogram-cut-function
+;;       (lambda (text)
+;;         (with-temp-buffer
+;;           (insert text)
+;;           (call-process-region (point-min) (point-max)
+;;                                "ssh" nil 0 nil "-p" "2222" "zhixu@10.0.0.73"
+;;                                "/mnt/c/ProgramData/chocolatey/bin/win32yank.exe -i --crlf"))))
+
+
+;; (setq use-system-tooltips nil)
+;; (setq use-dialog-box nil)
+(setq tooltip-mode nil)
+
 (provide 'setup-misc)

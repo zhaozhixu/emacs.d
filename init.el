@@ -12,7 +12,9 @@
        '(("gnu"   . "http://elpa.emacs-china.org/gnu/")
          ("melpa" . "http://elpa.emacs-china.org/melpa/")
          ("melpa-stable" . "http://elpa.emacs-china.org/melpa-stable/"))))
-  (setq package-archives pkg-official))
+  (setq package-archives pkg-tuna)
+  ; (setq package-archives pkg-official)
+  )
 
 (setq package-check-signature nil)
 (package-initialize)
@@ -69,6 +71,8 @@
     sr-speedbar
     bison-mode
     message-view-patch
+    rust-mode
+    deno-ts-mode
     ))
 
 (defun install-packages ()
