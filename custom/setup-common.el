@@ -48,9 +48,7 @@ apps are not started from a shell."
 
 (defun my/map-key (key)
   "Map KEY from escape sequence \"\e[emacs-KEY.\""
-  (define-key function-key-map (concat "\e[emacs-" key "]") (kbd key)))
-
-(my/global-map-and-set-key "C-;" 'iedit-mode)
+  (define-key function-key-map (concat "\e[emacs-" key) (kbd key)))
 
 (defun uname-r ()
   "Return shell command result of 'uname -r'"
