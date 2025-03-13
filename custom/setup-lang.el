@@ -48,7 +48,13 @@
   (global-tree-sitter-mode)
   ;; you can easily see the difference tree-sitter-hl-mode makes for python, ts or tsx
   ;; by switching on and off
-  (add-hook 'tree-sitter-after-on-hook #'tree-sitter-hl-mode))
+  (add-hook 'tree-sitter-after-on-hook #'tree-sitter-hl-mode)
+  (add-function :before-while tree-sitter-hl-face-mapping-function
+	      (lambda (capture-name)
+		(not (or (string= capture-name "function.call")
+			 (string= capture-name "method.call")
+			 (string= capture-name "property")))))
+)
 
 (use-package tree-sitter-langs
   :ensure t
@@ -308,7 +314,7 @@
   :bind (:map dart-mode-map
               ("C-M-x" . #'my-flutter-run-or-hot-reload)
               ("C-M-c" . #'my-flutter-delete-flutter-window))
-  :custom (flutter-sdk-path "/Users/shuhao/workspace/flutter"))
+  :custom (flutter-sdk-path "/Users/zhixu/workspace/flutter"))
 
 ;; Rust
 (add-hook 'rust-mode-hook (lambda ()

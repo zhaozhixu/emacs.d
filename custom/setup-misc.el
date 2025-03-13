@@ -147,11 +147,12 @@ Operate on selected region on whole buffer."
     (pixel-scroll-precision-mode))
 
 ;; WSL clipboard fix
-(setq interprogram-cut-function
-      (lambda (text)
-        (with-temp-buffer
-          (insert text)
-          (call-process-region (point-min) (point-max) "win32yank.exe" nil 0 nil "-i" "--crlf"))))
+;; (setq interprogram-cut-function
+;;       (lambda (text)
+;;         (with-temp-buffer
+;;           (insert text)
+;;           (call-process-region (point-min) (point-max) "win32yank.exe" nil 0 nil "-i" "--crlf"))))
+
 ;; (setq interprogram-cut-function
 ;;       (lambda (text)
 ;;         (with-temp-buffer

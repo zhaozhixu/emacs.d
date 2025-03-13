@@ -7,7 +7,8 @@
       (pkg-tuna
        '(("gnu"   . "http://mirrors.tuna.tsinghua.edu.cn/elpa/gnu/")
          ("nongnu"   . "http://mirrors.tuna.tsinghua.edu.cn/elpa/nongnu/")
-         ("melpa" . "http://mirrors.tuna.tsinghua.edu.cn/elpa/melpa/")))
+         ("melpa" . "http://mirrors.tuna.tsinghua.edu.cn/elpa/melpa/")
+	 ("melpa-stable" . "http://mirrors.tuna.tsinghua.edu.cn/elpa/stable-melpa/")))
       (pkg-emacs-china
        '(("gnu"   . "http://elpa.emacs-china.org/gnu/")
          ("melpa" . "http://elpa.emacs-china.org/melpa/")
