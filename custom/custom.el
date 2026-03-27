@@ -25,6 +25,7 @@
      ".tp" ".vr" ".cps" ".fns" ".kys" ".pgs" ".tps" ".vrs" ".pyc"
      ".pyo" ".idx" ".lof" ".lot" ".glo" ".blg" ".bbl" ".cp" ".cps"
      ".fn" ".fns" ".ky" ".kys" ".pg" ".pgs" ".tp" ".tps" ".vr" ".vrs"))
+ '(eca-custom-command '("~/.emacs.d/eca/eca" "server"))
  '(ibuffer-saved-filter-groups
    '(("perl" ("Perl" (used-mode . cperl-mode)))
      ("m" ("Octave" (used-mode . octave-mode)))
@@ -68,7 +69,17 @@
      "[/\\\\][^/\\\\]+.so\\'" "[/\\\\][^/\\\\]+.onnx\\'"
      "[/\\\\][^/\\\\]+.trt\\'"))
  '(org-agenda-files '("~/org-note/Agenda.org"))
- '(package-selected-packages nil)
+ '(package-selected-packages
+   '(anzu bison-mode clean-aindent-mode cmake-mode comment-dwim-2 company
+          csv-mode deno-ts-mode diminish dockerfile-mode dtrt-indent
+          duplicate-thing eca flutter flycheck ggtags go-mode
+          google-c-style helm-gtags helm-lsp helm-projectile
+          helm-swoop iedit kotlin-mode leetcode lsp-dart lsp-pyright
+          lsp-ui message-view-patch protobuf-mode pyvenv racket-mode
+          rust-mode smartparens sql-indent sr-speedbar thrift
+          tree-sitter-langs undo-tree volatile-highlights vue-mode
+          web-mode window-number ws-butler yaml-mode yasnippet
+          zygospore))
  '(project-linux-architecture-default "x86")
  '(project-linux-build-directory-default 'same)
  '(safe-local-variable-values '((encoding . utf-8)))

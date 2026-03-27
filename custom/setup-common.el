@@ -85,5 +85,8 @@ apps are not started from a shell."
       (if window
           (set-window-point window (point-max))))))
 
+(global-set-key (kbd "<pinch>") 'ignore)
+(global-set-key (kbd "<C-wheel-up>") 'ignore)
+(global-set-key (kbd "<C-wheel-down>") 'ignore)
 
 (provide 'setup-common)
