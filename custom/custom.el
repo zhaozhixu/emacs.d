@@ -8,6 +8,7 @@
  '(ansi-color-names-vector
    ["#2e3436" "#a40000" "#4e9a06" "#c4a000" "#204a87" "#5c3566" "#729fcf"
     "#eeeeec"])
+ '(claude-code-ide-cli-extra-flags "--dangerously-skip-permissions")
  '(column-number-mode t)
  '(custom-safe-themes
    '("795ff44faa4aadccbbf844791241d4d35c7ae962e5ef9b7844a42546097e6b19"
@@ -70,16 +71,19 @@
      "[/\\\\][^/\\\\]+.trt\\'"))
  '(org-agenda-files '("~/org-note/Agenda.org"))
  '(package-selected-packages
-   '(anzu bison-mode clean-aindent-mode cmake-mode comment-dwim-2 company
-          csv-mode deno-ts-mode diminish dockerfile-mode dtrt-indent
-          duplicate-thing eca flutter flycheck ggtags go-mode
-          google-c-style helm-gtags helm-lsp helm-projectile
-          helm-swoop iedit kotlin-mode leetcode lsp-dart lsp-pyright
-          lsp-ui message-view-patch protobuf-mode pyvenv racket-mode
-          rust-mode smartparens sql-indent sr-speedbar thrift
-          tree-sitter-langs undo-tree volatile-highlights vue-mode
-          web-mode window-number ws-butler yaml-mode yasnippet
-          zygospore))
+   '(acp agent-shell anzu bison-mode claude-code-ide clean-aindent-mode
+         cmake-mode comment-dwim-2 company csv-mode deno-ts-mode
+         diminish dockerfile-mode dtrt-indent duplicate-thing flutter
+         flycheck ggtags go-mode google-c-style helm-gtags helm-lsp
+         helm-projectile iedit leetcode lsp-dart lsp-pyright lsp-ui
+         message-view-patch protobuf-mode pyvenv racket-mode rust-mode
+         shell-maker smartparens sql-indent sr-speedbar thrift
+         tree-sitter-langs undo-tree volatile-highlights vterm
+         web-mode window-number ws-butler yaml-mode yasnippet
+         zygospore))
+ '(package-vc-selected-packages
+   '((claude-code-ide :url
+                      "https://github.com/manzaltu/claude-code-ide.el")))
  '(project-linux-architecture-default "x86")
  '(project-linux-build-directory-default 'same)
  '(safe-local-variable-values '((encoding . utf-8)))

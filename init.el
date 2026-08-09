@@ -2,6 +2,7 @@
 
 (let ((pkg-official
        '(("melpa" . "https://melpa.org/packages/")
+         ("melpa-stable" . "https://stable.melpa.org/packages/")
          ("gnu"   . "https://elpa.gnu.org/packages/")
          ("nongnu" . "https://elpa.nongnu.org/nongnu/")))
       (pkg-tuna
@@ -13,8 +14,8 @@
        '(("gnu"   . "http://elpa.emacs-china.org/gnu/")
          ("melpa" . "http://elpa.emacs-china.org/melpa/")
          ("melpa-stable" . "http://elpa.emacs-china.org/melpa-stable/"))))
-  (setq package-archives pkg-tuna)
-  ; (setq package-archives pkg-official)
+  ;; (setq package-archives pkg-tuna)
+  (setq package-archives pkg-official)
   )
 
 (setq package-check-signature nil)
@@ -29,7 +30,7 @@
     helm
     helm-gtags
     helm-projectile
-    helm-swoop
+    ; helm-swoop
     clean-aindent-mode
     comment-dwim-2
     diminish
@@ -74,6 +75,8 @@
     message-view-patch
     rust-mode
     deno-ts-mode
+    vterm
+    agent-shell
     ))
 
 (defun install-packages ()
@@ -100,6 +103,21 @@
 (require 'setup-lang)
 (require 'setup-misc)
 (require 'setup-mu4e)
+(require 'setup-ai)
 
 (setq custom-file "~/.emacs.d/custom/custom.el")
 (load custom-file)
+(custom-set-variables
+ ;; custom-set-variables was added by Custom.
+ ;; If you edit it by hand, you could mess it up, so be careful.
+ ;; Your init file should contain only one such instance.
+ ;; If there is more than one, they won't work right.
+ '(package-vc-selected-packages
+   '((claude-code-ide :url
+                      "https://github.com/manzaltu/claude-code-ide.el"))))
+(custom-set-faces
+ ;; custom-set-faces was added by Custom.
+ ;; If you edit it by hand, you could mess it up, so be careful.
+ ;; Your init file should contain only one such instance.
+ ;; If there is more than one, they won't work right.
+ )
