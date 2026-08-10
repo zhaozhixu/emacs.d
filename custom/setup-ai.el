@@ -13,7 +13,7 @@
   (require 'agent-shell-cursor)
   (require 'agent-shell-anthropic)
   (require 'agent-shell-auto-retry)
-  (setq my/agent-shell-retry-auto-enable t)
+  (my/agent-shell-global-retry-mode 1)
 
   (global-set-key (kbd "C-c a o") #'agent-shell-start-codex)
   (global-set-key (kbd "C-c a u") #'agent-shell-cursor-start-agent)
