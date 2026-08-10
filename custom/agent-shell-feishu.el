@@ -79,6 +79,7 @@
 ;;; Code:
 
 (require 'agent-shell)
+(require 'agent-shell-prompt-queue)
 (require 'json)
 (require 'map)
 (require 'seq)
@@ -466,11 +467,15 @@ ignored so stray diagnostics never trip the parser."
         (agent-shell-feishu--handle-line line)))))
 
 (defun agent-shell-feishu--handle-line (line)
-  "Handle one NDJSON LINE, routing it to the bound session's buffer."
+  "Handle one NDJSON LINE, routing it to the bound session's buffer.
+
+`lark-cli event consume' emits a flat, agent-friendly format: `type',
+`chat_id', `message_type', `sender_id' (the open_id), and `content'
+are top-level keys."
   (when-let* ((event (agent-shell-feishu--parse-json line))
-              (message-data (map-nested-elt event '(event message)))
-              (sender (map-nested-elt event '(event sender sender_id open_id))))
-    (let ((chat-id (map-elt message-data 'chat_id)))
+              ((equal (map-elt event 'type) "im.message.receive_v1"))
+              (sender (map-elt event 'sender_id)))
+    (let ((chat-id (map-elt event 'chat_id)))
       (cond
        ((not (member sender agent-shell-feishu-allowed-open-ids))
         (agent-shell-feishu--log
@@ -482,7 +487,7 @@ ignored so stray diagnostics never trip the parser."
         (let ((state (agent-shell-feishu--bridge-for-chat chat-id)))
           (cond
            (state
-            (agent-shell-feishu--dispatch-message state message-data))
+            (agent-shell-feishu--dispatch-message state event))
            ((buffer-live-p agent-shell-feishu--awaiting-claim)
             (setq state (buffer-local-value 'agent-shell-feishu--state
                                             agent-shell-feishu--awaiting-claim))
@@ -495,7 +500,7 @@ ignored so stray diagnostics never trip the parser."
              state (format "\U0001F517 Bound to session %s"
                            (agent-shell-feishu--session-label
                             (map-elt state :buffer))))
-            (agent-shell-feishu--dispatch-message state message-data))
+            (agent-shell-feishu--dispatch-message state event))
            (t
             (agent-shell-feishu--log
              "Message in chat %s has no bound session (none awaiting claim); ignoring"
@@ -508,13 +513,13 @@ ignored so stray diagnostics never trip the parser."
                    (equal (map-elt state :chat-id) chat-id)))
             agent-shell-feishu--bridges))
 
-(defun agent-shell-feishu--dispatch-message (state message-data)
-  "Route MESSAGE-DATA for the session in STATE.
+(defun agent-shell-feishu--dispatch-message (state event)
+  "Route EVENT for the session in STATE.
 
 Non-text messages are declined; text is treated as the answer to a
 pending approval, or otherwise injected as a prompt."
-  (let ((message-type (map-elt message-data 'message_type))
-        (text (agent-shell-feishu--message-text message-data)))
+  (let ((message-type (map-elt event 'message_type))
+        (text (agent-shell-feishu--message-text event)))
     (cond
      ((not (member message-type '("text" "post")))
       (agent-shell-feishu--send
@@ -547,21 +552,22 @@ pending approval, or otherwise injected as a prompt."
        (agent-shell-feishu--send
         state (format "⚠ Could not interrupt: %s" (error-message-string err)))))))
 
-(defun agent-shell-feishu--message-text (message-data)
-  "Return the trimmed user text of MESSAGE-DATA, or nil.
+(defun agent-shell-feishu--message-text (event)
+  "Return the trimmed user text of EVENT, or nil.
 
-MESSAGE-DATA is the `.event.message' alist.  Handles both `text'
-messages (content {\"text\":\"hi\"}) and `post' rich-text messages
-\\(as sent for group @mentions).  @mention placeholders and at-segments
-are dropped."
-  (when-let* ((content (map-elt message-data 'content))
-              (parsed (agent-shell-feishu--parse-json content))
-              (raw (pcase (map-elt message-data 'message_type)
-                     ("text" (map-elt parsed 'text))
-                     ("post" (agent-shell-feishu--post-plain-text parsed))
-                     (_ nil))))
-    (let ((cleaned (string-trim
-                    (replace-regexp-in-string "@_user_[0-9]+" "" raw))))
+`lark-cli''s agent-friendly format carries the extracted message text
+directly in `content'; when `content' still holds raw JSON (older
+formats), fall back to parsing it.  @mention placeholders are dropped."
+  (when-let* ((raw (map-elt event 'content))
+              ((stringp raw)))
+    (let* ((parsed (and (string-prefix-p "{" raw)
+                        (agent-shell-feishu--parse-json raw)))
+           (text (cond ((and parsed (map-elt parsed 'text))
+                        (map-elt parsed 'text))
+                       (parsed (agent-shell-feishu--post-plain-text parsed))
+                       (t raw)))
+           (cleaned (string-trim
+                     (replace-regexp-in-string "@_user_[0-9]+" "" (or text "")))))
       (unless (string-empty-p cleaned)
         cleaned))))
 
@@ -582,15 +588,20 @@ segments are skipped."
     (string-join (nreverse lines) "\n")))
 
 (defun agent-shell-feishu--inject-prompt (state text)
-  "Inject TEXT as a submitted prompt into STATE's shell buffer."
+  "Queue or submit TEXT as a prompt into STATE's shell buffer.
+
+Uses `agent-shell-prompt-queue', which submits immediately when the
+shell is idle and otherwise queues TEXT to run when the current turn
+completes."
   (let ((shell-buffer (map-elt state :buffer)))
     (condition-case err
-        (progn
-          (agent-shell--insert-to-shell-buffer
-           :shell-buffer shell-buffer :text text :submit t :no-focus t)
-          (agent-shell-feishu--log "Injected prompt into %s: %s"
-                                   (buffer-name shell-buffer)
-                                   (agent-shell-feishu--truncate text)))
+        (with-current-buffer shell-buffer
+          (let ((was-busy (shell-maker-busy)))
+            (agent-shell-prompt-queue text)
+            (agent-shell-feishu--log "%s prompt into %s: %s"
+                                     (if was-busy "Queued" "Injected")
+                                     (buffer-name shell-buffer)
+                                     (agent-shell-feishu--truncate text))))
       (error
        (agent-shell-feishu--send
         state (format "\u26A0 Could not submit prompt: %s"

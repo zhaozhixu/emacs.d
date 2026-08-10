@@ -22,7 +22,10 @@
   ;; long-connection.  Deny-all until the allowlist is set; see
   ;; commentary in agent-shell-feishu.el.
   (require 'agent-shell-feishu)
-  ;; (setq agent-shell-feishu-allowed-open-ids '("ou_xxx"))
+  ;; Private settings (e.g. agent-shell-feishu-allowed-open-ids) stay
+  ;; out of this repo; keep them in ~/.emacs.private.el.
+  (when (file-exists-p "~/.emacs.private.el")
+    (load (expand-file-name "~/.emacs.private.el") nil t))
 
   (global-set-key (kbd "C-c a o") #'agent-shell-start-codex)
   (global-set-key (kbd "C-c a u") #'agent-shell-cursor-start-agent)
