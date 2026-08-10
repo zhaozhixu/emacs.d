@@ -15,6 +15,15 @@
   (require 'agent-shell-auto-retry)
   (my/agent-shell-global-retry-mode 1)
 
+  ;; Feishu/Lark bridge: drive agent-shell sessions from Feishu chats.
+  ;; Needs the official lark-cli on PATH (npm install -g @larksuite/cli),
+  ;; configured via `lark-cli config init' and `lark-cli auth login' for
+  ;; a bot app with im:message scope and im.message.receive_v1 over
+  ;; long-connection.  Deny-all until the allowlist is set; see
+  ;; commentary in agent-shell-feishu.el.
+  (require 'agent-shell-feishu)
+  ;; (setq agent-shell-feishu-allowed-open-ids '("ou_xxx"))
+
   (global-set-key (kbd "C-c a o") #'agent-shell-start-codex)
   (global-set-key (kbd "C-c a u") #'agent-shell-cursor-start-agent)
   (global-set-key (kbd "C-c a l") #'agent-shell-anthropic-start-claude-code)
