@@ -170,6 +170,18 @@ calls; a message segment is relayed when the next tool call closes it."
   :type 'boolean
   :group 'agent-shell-feishu)
 
+(defcustom agent-shell-feishu-permission-cards t
+  "When non-nil, relay permission requests as interactive cards.
+
+Each request gets its own card with one button per option, so several
+pending permissions stay unambiguous.  Answered cards are updated in
+place to show the outcome.  Requires the app to have the
+`card.action.trigger' callback subscribed in the developer console.
+When nil, fall back to the reply-based flow (numbered text options
+answered by replying in the chat)."
+  :type 'boolean
+  :group 'agent-shell-feishu)
+
 (defcustom agent-shell-feishu-label-outbound t
   "When non-nil, prefix outbound messages with a session label.
 
@@ -201,6 +213,25 @@ to the right session.")
 
 (defvar agent-shell-feishu--consumer-pending-line ""
   "Partial NDJSON line accumulator for the shared consumer.")
+
+(defvar agent-shell-feishu--card-consumer nil
+  "The shared `card.action.trigger' consumer process, or nil.")
+
+(defvar agent-shell-feishu--card-consumer-stderr nil
+  "Stderr pipe process for the card consumer, or nil.")
+
+(defvar agent-shell-feishu--card-consumer-pending-line ""
+  "Partial NDJSON line accumulator for the card consumer.")
+
+(defvar agent-shell-feishu--pending-permissions nil
+  "Alist of (PID . ENTRY) for permissions relayed as cards.
+
+ENTRY is an alist with `:respond', `:options', `:state', and
+`:title'.  PID strings are minted per request so answers from card
+buttons are unambiguous even with several requests pending.")
+
+(defvar agent-shell-feishu--permission-counter 0
+  "Monotonic counter used to mint permission ids.")
 
 (defvar agent-shell-feishu--awaiting-claim nil
   "Shell buffer awaiting a chat binding via the claim handshake, or nil.")
@@ -283,7 +314,9 @@ consumer is running."
       (agent-shell-feishu--register-responder)
       (setq agent-shell-feishu--bridges
             (cons state (delq state agent-shell-feishu--bridges)))
-      (agent-shell-feishu--ensure-consumer))
+      (agent-shell-feishu--ensure-consumer)
+      (when agent-shell-feishu-permission-cards
+        (agent-shell-feishu--ensure-card-consumer)))
     (cond
      (chat-id
       (agent-shell-feishu--bind-chat state chat-id)
@@ -430,16 +463,59 @@ never reaches the JSON filter."
            :sentinel #'agent-shell-feishu--consumer-sentinel))
     (agent-shell-feishu--log "Shared consumer started")))
 
+(defun agent-shell-feishu--ensure-card-consumer ()
+  "Start the shared `card.action.trigger' consumer if not running.
+
+Only used when `agent-shell-feishu-permission-cards' is non-nil.  The
+app must have the `card.action.trigger' callback subscribed in the
+developer console, or the process exits immediately (see the log)."
+  (unless (process-live-p agent-shell-feishu--card-consumer)
+    (setq agent-shell-feishu--card-consumer-pending-line "")
+    (setq agent-shell-feishu--card-consumer-stderr
+          (make-pipe-process
+           :name "agent-shell-feishu-card-stderr"
+           :buffer (get-buffer-create " *agent-shell-feishu-card-stderr*")
+           :filter #'agent-shell-feishu--stderr-filter
+           :noquery t))
+    (setq agent-shell-feishu--card-consumer
+          (make-process
+           :name "agent-shell-feishu-card-consume"
+           :buffer (get-buffer-create " *agent-shell-feishu-card-consume*")
+           :connection-type 'pipe
+           :command (list agent-shell-feishu-cli-command
+                          "event" "consume" "card.action.trigger"
+                          "--as" "bot")
+           :filter #'agent-shell-feishu--card-filter
+           :stderr agent-shell-feishu--card-consumer-stderr
+           :sentinel #'agent-shell-feishu--consumer-sentinel))
+    (agent-shell-feishu--log "Card consumer started")))
+
+(defun agent-shell-feishu--card-filter (_process output)
+  "Accumulate OUTPUT into NDJSON lines for card actions."
+  (let* ((pending (concat agent-shell-feishu--card-consumer-pending-line output))
+         (lines (split-string pending "\n")))
+    (setq agent-shell-feishu--card-consumer-pending-line (car (last lines)))
+    (dolist (line (butlast lines))
+      (setq line (string-trim line))
+      (when (string-prefix-p "{" line)
+        (agent-shell-feishu--handle-card-line line)))))
+
 (defun agent-shell-feishu--stop-consumer ()
-  "Stop the shared consumer process, if any."
-  (when (process-live-p agent-shell-feishu--consumer)
-    (delete-process agent-shell-feishu--consumer))
-  (when (process-live-p agent-shell-feishu--consumer-stderr)
-    (delete-process agent-shell-feishu--consumer-stderr))
+  "Stop the shared consumer processes, if any."
+  (dolist (process (list agent-shell-feishu--consumer
+                         agent-shell-feishu--consumer-stderr
+                         agent-shell-feishu--card-consumer
+                         agent-shell-feishu--card-consumer-stderr))
+    (when (process-live-p process)
+      (delete-process process)))
   (setq agent-shell-feishu--consumer nil)
   (setq agent-shell-feishu--consumer-stderr nil)
   (setq agent-shell-feishu--consumer-pending-line "")
-  (agent-shell-feishu--log "Shared consumer stopped"))
+  (setq agent-shell-feishu--card-consumer nil)
+  (setq agent-shell-feishu--card-consumer-stderr nil)
+  (setq agent-shell-feishu--card-consumer-pending-line "")
+  (setq agent-shell-feishu--pending-permissions nil)
+  (agent-shell-feishu--log "Shared consumers stopped"))
 
 (defun agent-shell-feishu--consumer-sentinel (process change)
   "Log when the consume PROCESS exits.  CHANGE is the status string."
@@ -870,15 +946,173 @@ chat; nil to fall back to the interactive dialog."
               ((map-elt state :chat-id))
               (options (map-elt permission :options)))
     (let ((title (map-elt tool-call :title)))
-      (map-put! state :pending
-                (list (cons :respond (map-elt permission :respond))
-                      (cons :options options)
-                      (cons :title title)))
-      (agent-shell-feishu--send
-       state (agent-shell-feishu--approval-text title options))
+      (if agent-shell-feishu-permission-cards
+          (agent-shell-feishu--send-permission-card
+           state title options (map-elt permission :respond))
+        (map-put! state :pending
+                  (list (cons :respond (map-elt permission :respond))
+                        (cons :options options)
+                        (cons :title title)))
+        (agent-shell-feishu--send
+         state (agent-shell-feishu--approval-text title options)))
       (agent-shell-feishu--log "Permission relayed to %s: %s"
                                (buffer-name (map-elt state :buffer)) title)
       t)))
+
+(defun agent-shell-feishu--option-kind-allow-p (option)
+  "Return non-nil when OPTION's :kind is an allow variant."
+  (string-prefix-p "allow" (or (map-elt option :kind) "")))
+
+(defun agent-shell-feishu--permission-card (pid title options state)
+  "Build the card alist for permission PID with TITLE and OPTIONS in STATE."
+  `((schema . "2.0")
+    (header . ((template . "orange")
+               (title . ((tag . "plain_text")
+                         (content . "\U0001F510 Permission needed")))))
+    (body
+     . ((elements
+         . ,(vconcat
+             (list `((tag . "markdown")
+                     (content . ,(format "**%s**\nSession: %s"
+                                         (or title "tool call")
+                                         (agent-shell-feishu--session-label
+                                          (map-elt state :buffer))))))
+             (mapcar
+              (lambda (option)
+                `((tag . "button")
+                  (text . ((tag . "plain_text")
+                           (content . ,(or (map-elt option :label) "Option"))))
+                  (type . ,(cond
+                            ((agent-shell-feishu--option-kind-allow-p option)
+                             "primary")
+                            ((string-prefix-p "reject"
+                                              (or (map-elt option :kind) ""))
+                             "danger")
+                            (t "default")))
+                  (behaviors
+                   . ,(vector
+                       `((type . "callback")
+                         (value . ((pid . ,pid)
+                                   (option_id . ,(map-elt option :option-id)))))))))
+              options)))))))
+
+(defun agent-shell-feishu--send-permission-card (state title options respond)
+  "Send a permission card for TITLE/OPTIONS in STATE; wire RESPOND to it."
+  (let ((pid (format "p%d" (setq agent-shell-feishu--permission-counter
+                                 (1+ agent-shell-feishu--permission-counter)))))
+    (push (cons pid (list (cons :respond respond)
+                          (cons :options options)
+                          (cons :state state)
+                          (cons :title title)))
+          agent-shell-feishu--pending-permissions)
+    (make-process
+     :name "agent-shell-feishu-card-send"
+     :buffer (get-buffer-create " *agent-shell-feishu-send*")
+     :connection-type 'pipe
+     :command (list "timeout"
+                    (number-to-string agent-shell-feishu-command-timeout)
+                    agent-shell-feishu-cli-command
+                    "im" "+messages-send"
+                    "--as" "bot"
+                    "--chat-id" (map-elt state :chat-id)
+                    "--msg-type" "interactive"
+                    "--content" (json-encode
+                                 (agent-shell-feishu--permission-card
+                                  pid title options state)))
+     :sentinel
+     (lambda (process _change)
+       (when (memq (process-status process) '(exit signal))
+         (unless (zerop (process-exit-status process))
+           (agent-shell-feishu--log
+            "Card send failed (exit %d): %s"
+            (process-exit-status process)
+            (with-current-buffer (process-buffer process)
+              (string-trim (buffer-string))))))))))
+
+(defun agent-shell-feishu--answered-card (title label allow-p)
+  "Build the retired card for TITLE answered with LABEL; ALLOW-P colors it."
+  `((schema . "2.0")
+    (header . ((template . ,(if allow-p "green" "red"))
+               (title . ((tag . "plain_text")
+                         (content . ,(if allow-p
+                                         "Permission granted"
+                                       "Permission rejected"))))))
+    (body . ((elements
+              . ,(vector
+                  `((tag . "markdown")
+                    (content . ,(format "**%s**\n%s %s"
+                                        (or title "tool call")
+                                        (if allow-p "\u2705" "\u274C")
+                                        (or label ""))))))))))
+
+(defun agent-shell-feishu--update-card (token card)
+  "Update a sent card via TOKEN with the new CARD alist."
+  (make-process
+   :name "agent-shell-feishu-card-update"
+   :buffer (get-buffer-create " *agent-shell-feishu-send*")
+   :connection-type 'pipe
+   :command (list "timeout"
+                  (number-to-string agent-shell-feishu-command-timeout)
+                  agent-shell-feishu-cli-command
+                  "api" "POST" "/open-apis/interactive/v1/card/update"
+                  "--as" "bot"
+                  "--data" (json-encode `((token . ,token) (card . ,card))))
+   :sentinel
+   (lambda (process _change)
+     (when (memq (process-status process) '(exit signal))
+       (unless (zerop (process-exit-status process))
+         (agent-shell-feishu--log
+          "Card update failed (exit %d): %s"
+          (process-exit-status process)
+          (with-current-buffer (process-buffer process)
+            (string-trim (buffer-string)))))))))
+
+(defun agent-shell-feishu--handle-card-line (line)
+  "Handle one `card.action.trigger' NDJSON LINE."
+  (when-let* ((event (agent-shell-feishu--parse-json line))
+              ((equal (map-elt event 'type) "card.action.trigger"))
+              (operator (map-elt event 'operator_id)))
+    (if (not (member operator agent-shell-feishu-allowed-open-ids))
+        (agent-shell-feishu--log "Ignored card action from unlisted operator: %s"
+                                 operator)
+      (let* ((value (and (stringp (map-elt event 'action_value))
+                         (agent-shell-feishu--parse-json
+                          (map-elt event 'action_value))))
+             (pid (map-elt value 'pid))
+             (option-id (map-elt value 'option_id))
+             (entry (cdr (assoc pid agent-shell-feishu--pending-permissions)))
+             (token (map-elt event 'token)))
+        (cond
+         ((null entry)
+          (agent-shell-feishu--log "Card action for unknown/expired pid %s" pid)
+          (when token
+            (agent-shell-feishu--update-card
+             token (agent-shell-feishu--answered-card
+                    "This request has expired" "" nil))))
+         (t
+          (setq agent-shell-feishu--pending-permissions
+                (assoc-delete-all pid agent-shell-feishu--pending-permissions))
+          (let* ((option (seq-find (lambda (option)
+                                     (equal (map-elt option :option-id)
+                                            option-id))
+                                   (map-elt entry :options)))
+                 (label (or (map-elt option :label) option-id))
+                 (allow-p (and option
+                               (agent-shell-feishu--option-kind-allow-p option))))
+            (condition-case err
+                (funcall (map-elt entry :respond) option-id)
+              (error
+               (agent-shell-feishu--log "Card respond failed for %s: %s"
+                                        pid (error-message-string err))))
+            (when token
+              (agent-shell-feishu--update-card
+               token (agent-shell-feishu--answered-card
+                      (map-elt entry :title) label allow-p)))
+            (agent-shell-feishu--log
+             "Permission %s answered via card in %s: %s"
+             pid
+             (buffer-name (map-elt (map-elt entry :state) :buffer))
+             label))))))))
 
 (defun agent-shell-feishu--approval-text (title options)
   "Return the approval prompt text for TITLE and OPTIONS."
