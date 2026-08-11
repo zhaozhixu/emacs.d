@@ -40,7 +40,7 @@
   "Auto-retries sent for the current user prompt.")
 
 (defvar-local my/agent-shell-retry--last-user-prompt nil
-  "Most recent user-authored prompt, captured from `comint-input-ring'.")
+  "Most recent user-authored prompt, from the `input-submitted' event.")
 
 (defvar-local my/agent-shell-retry--timer nil
   "Pending retry timer, if any.")
@@ -81,19 +81,18 @@ Last user prompt before the failure:
               (substring combined -4000)
             combined))))
 
-(defun my/agent-shell-retry--on-input-submitted (_event)
-  "Reset per-turn state; a user-authored prompt also resets the chain."
+(defun my/agent-shell-retry--on-input-submitted (event)
+  "Reset per-turn state; a user-authored prompt also resets the chain.
+EVENT's `:prompt' (agent-shell 0.71.1+) is captured as the last user
+prompt, so a retry turn can quote the request that failed."
   (if my/agent-shell-retry--own-submit
       (setq my/agent-shell-retry--own-submit nil)
     (when (timerp my/agent-shell-retry--timer)
       (cancel-timer my/agent-shell-retry--timer))
     (setq my/agent-shell-retry--timer nil)
     (setq my/agent-shell-retry--attempt 0)
-    (when (and (bound-and-true-p comint-input-ring)
-               (ring-p comint-input-ring)
-               (not (ring-empty-p comint-input-ring)))
-      (setq my/agent-shell-retry--last-user-prompt
-            (substring-no-properties (ring-ref comint-input-ring 0)))))
+    (when-let* ((prompt (map-nested-elt event '(:data :prompt))))
+      (setq my/agent-shell-retry--last-user-prompt prompt)))
   (setq my/agent-shell-retry--tail ""))
 
 (defun my/agent-shell-retry--on-turn-complete (event)
