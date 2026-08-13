@@ -75,10 +75,10 @@
          cmake-mode comment-dwim-2 company csv-mode deno-ts-mode
          diminish dockerfile-mode dtrt-indent duplicate-thing flutter
          flycheck ggtags go-mode google-c-style helm-gtags helm-lsp
-         helm-projectile iedit leetcode lsp-dart lsp-pyright lsp-ui
-         message-view-patch protobuf-mode pyvenv racket-mode rust-mode
-         shell-maker smartparens sql-indent sr-speedbar thrift
-         tree-sitter-langs undo-tree volatile-highlights vterm
+         helm-projectile iedit indent-bars leetcode lsp-dart
+         lsp-pyright lsp-ui message-view-patch protobuf-mode pyvenv
+         racket-mode rust-mode shell-maker smartparens sql-indent
+         sr-speedbar thrift undo-tree volatile-highlights vterm
          web-mode window-number ws-butler yaml-mode yasnippet
          zygospore))
  '(package-vc-selected-packages

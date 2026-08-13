@@ -77,6 +77,7 @@
     deno-ts-mode
     vterm
     agent-shell
+    indent-bars
     ))
 
 (defun install-packages ()
