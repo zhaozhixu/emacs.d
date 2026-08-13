@@ -50,7 +50,22 @@
   :ensure t)
 
 (my/global-map-and-set-key "C-:" 'lsp-toggle-symbol-highlight)
-(my/global-map-and-set-key "C-." 'lsp-format-buffer)
+(defun my/format-buffer-dwim ()
+  "Format the buffer (or region): clang-format when the project has a
+.clang-format, cc-mode style indentation as fallback in C/C++,
+`lsp-format-buffer' elsewhere."
+  (interactive)
+  (let ((beg (if (use-region-p) (region-beginning) (point-min)))
+        (end (if (use-region-p) (region-end) (point-max))))
+    (if (and (derived-mode-p 'c-mode 'c++-mode)
+             (not (or (locate-dominating-file default-directory ".clang-format")
+                      (locate-dominating-file default-directory "_clang-format"))))
+        (indent-region beg end)
+      (if (use-region-p)
+          (lsp-format-region beg end)
+        (lsp-format-buffer)))))
+
+(my/global-map-and-set-key "C-." 'my/format-buffer-dwim)
 (my/global-map-and-set-key "M-p" 'lsp-execute-code-action)
 (my/global-map-and-set-key "M-I" 'lsp-ui-doc-glance)
 
