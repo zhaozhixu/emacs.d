@@ -83,7 +83,7 @@
   (interactive)
   (let ((beg (if (use-region-p) (region-beginning) (point-min)))
         (end (if (use-region-p) (region-end) (point-max))))
-    (if (and (derived-mode-p 'c-mode 'c++-mode)
+    (if (and (derived-mode-p 'c-mode 'c++-mode 'c-ts-base-mode)
              (not (or (locate-dominating-file default-directory ".clang-format")
                       (locate-dominating-file default-directory "_clang-format"))))
         (indent-region beg end)
@@ -99,9 +99,11 @@
 
 ;; Built-in treesit (Emacs 29+): grammar sources and ts-mode remaps.
 ;; Install/update grammars with M-x treesit-install-language-grammar.
-;; C/C++ stay on cc-mode (custom c-add-style setups don't port).
+;; C/C++ remaps and styles live in the C/C++ section below.
 (setq treesit-language-source-alist
-      '((python "https://github.com/tree-sitter/tree-sitter-python")
+      '((c "https://github.com/tree-sitter/tree-sitter-c")
+        (cpp "https://github.com/tree-sitter/tree-sitter-cpp")
+        (python "https://github.com/tree-sitter/tree-sitter-python")
         (yaml "https://github.com/ikatyang/tree-sitter-yaml")
         (typescript "https://github.com/tree-sitter/tree-sitter-typescript" "master" "typescript/src")
         (tsx "https://github.com/tree-sitter/tree-sitter-typescript" "master" "tsx/src")
@@ -140,83 +142,84 @@
 
 ;;; C / C++ ---------------------------------------------------------------------
 
-(defun c-lineup-arglist-tabs-only (ignored)
-  "Line up argument lists by tabs, not spaces"
-  (let* ((anchor (c-langelem-pos c-syntactic-element))
-         (column (c-langelem-2nd-pos c-syntactic-element))
-         (offset (- (1+ column) anchor))
-         (steps (floor offset c-basic-offset)))
-    (* (max steps 1)
-       c-basic-offset)))
-
-(defun my/c-common-setup ()
-  "Shared cc-mode setup: clangd flags, styles, folding."
+(defun my/c-lsp-setup ()
+  "Shared C/C++ setup for cc-mode and c-ts-mode: clangd, lsp, folding."
   (setq lsp-clients-clangd-args '("-j=4" "-background-index" "-log=error" "--header-insertion=never"
                                   "--enable-config" "--compile-commands-dir=build")
         lsp-ui-flycheck-enable t
         lsp-enable-indentation nil
         lsp-enable-snippet t)
   (lsp-deferred)
-  ;; Linux kernel style
-  (c-add-style
-   "linux-tabs-only"
-   '("linux"
-     (c-offsets-alist
-      (arglist-cont-nonempty
-       c-lineup-gcc-asm-reg
-       c-lineup-arglist-tabs-only))
-     (indent-tabs-mode . t)
-     (show-trailing-whitespace . t)))
-  (c-add-style
-   "lightnet"
-   '("k&r"
-     (c-basic-offset . 4)
-     (c-offsets-alist
-      (defun-block-intro . 4)
-      (defun-close . 0)
-      (defun-open . 0)
-      (statement . 0)
-      (statement-cont . ++)
-      (substatement . +)
-      (topmost-intro . 0)
-      (arglist-cont-nonempty
-       c-lineup-gcc-asm-reg
-       c-lineup-arglist))
-     (indent-tabs-mode . nil)
-     (show-trailing-whitespace . t)))
-  (c-add-style
-   "google-4-indent"
-   '("Google"
-     (c-basic-offset . 4)
-     (c-offsets-alist
-      (innamespace . -4))
-     (show-trailing-whitespace . t)))
   (hs-minor-mode)) ; folding source code
 
-(defun my/c-setup ()
-  "C style: lightnet, kernel style for kernel trees."
-  (c-set-style "lightnet")
-  (let ((filename (buffer-file-name)))
-    (when (and filename
-               (or (string-match (expand-file-name "~/workspace/source/linux") filename)
-                   (string-match (expand-file-name "~/workspace/projects/kernels") filename)))
-      (setq indent-tabs-mode t)
-      (setq show-trailing-whitespace t)
-      (c-set-style "linux-tabs-only"))))
+;; C/C++ on built-in c-ts-mode / c++-ts-mode (treesit).  Ported from
+;; the old cc-mode styles (archived in custom/unused/setup-cc-mode.el):
+;;   C default ("lightnet")        k&r rules, offset 4, spaces
+;;   kernel trees                  linux rules, offset 8, tabs
+;;   C++ default ("google-4-indent") k&r rules + namespace body not
+;;     indented + access labels at half offset; offset 4
+;;   onnxruntime                   same, offset 2 (plain google)
 
-(defun my/c++-setup ()
-  "C++ style: google-4-indent, plain google for onnxruntime."
-  (c-set-style "google-4-indent")
-  (let ((filename (buffer-file-name)))
-    (when (and filename
-               (string-match "onnxruntime/" filename))
-      (c-set-style "google"))))
+(defvar my/c-ts-half-offset 2
+  "Buffer-local access-label indent: half of `c-ts-mode-indent-offset'.")
 
-(add-hook 'c-mode-common-hook #'my/c-common-setup)
-(add-hook 'c-mode-hook #'my/c-setup)
-(add-hook 'c++-mode-hook #'my/c++-setup)
+(defun my/kernel-tree-file-p ()
+  "Non-nil when the current buffer visits a file in a kernel tree."
+  (when-let* ((file buffer-file-name))
+    (seq-some (lambda (tree)
+                (string-prefix-p (expand-file-name tree) file))
+              '("~/workspace/source/linux/" "~/workspace/projects/kernels/"))))
+
+(defun my/c-ts-indent-style ()
+  "Return per-buffer treesit indent rules (see the port table above)."
+  (cond
+   ((my/kernel-tree-file-p)
+    (alist-get 'linux (c-ts-mode--indent-styles
+                       (if (derived-mode-p 'c++-ts-mode) 'cpp 'c))))
+   ((derived-mode-p 'c++-ts-mode)
+    ;; The regexp must be anchored: unanchored "declaration_list" also
+    ;; matches field_declaration_list (class bodies).
+    `(((node-is "access_specifier") parent-bol my/c-ts-half-offset)
+      ((parent-is "\\`declaration_list\\'") parent-bol 0) ; namespace body
+      ,@(alist-get 'k&r (c-ts-mode--indent-styles 'cpp))))
+   (t
+    (alist-get 'k&r (c-ts-mode--indent-styles 'c)))))
+
+(setq c-ts-mode-indent-style #'my/c-ts-indent-style)
+
+(defun my/c-ts-setup ()
+  "C/C++ treesit setup: lsp plus per-tree offsets and tabs."
+  (my/c-lsp-setup)
+  (cond ((my/kernel-tree-file-p)
+         (setq-local c-ts-mode-indent-offset 8)
+         (setq-local tab-width 8) ; kernel code is one 8-wide tab per level
+         (setq indent-tabs-mode t))
+        ((and (derived-mode-p 'c++-ts-mode)
+              buffer-file-name
+              (string-match-p "onnxruntime/" buffer-file-name))
+         (setq-local c-ts-mode-indent-offset 2)
+         (setq indent-tabs-mode nil))
+        (t
+         (setq-local c-ts-mode-indent-offset 4)
+         (setq indent-tabs-mode nil)))
+  (setq-local my/c-ts-half-offset (/ c-ts-mode-indent-offset 2))
+  (setq show-trailing-whitespace t))
+
+(add-hook 'c-ts-base-mode-hook #'my/c-ts-setup)
+
+(dolist (remap '((c-mode . c-ts-mode)
+                 (c++-mode . c++-ts-mode)
+                 (c-or-c++-mode . c-or-c++-ts-mode)))
+  (add-to-list 'major-mode-remap-alist remap))
 (add-to-list 'auto-mode-alist '("\\.h\\'" . c++-mode))
 (add-to-list 'auto-mode-alist '("\\.cu\\'" . c++-mode))
+
+;; Kernel headers are C, not C++: route kernel-tree .c/.h straight to
+;; c-ts-mode, overriding the generic .h -> c++ entry above.
+(dolist (tree '("~/workspace/source/linux" "~/workspace/projects/kernels"))
+  (add-to-list 'auto-mode-alist
+               (cons (concat "\\`" (regexp-quote (expand-file-name tree)) "/.*\\.[ch]\\'")
+                     'c-ts-mode)))
 
 ;;; Python ----------------------------------------------------------------------
 
