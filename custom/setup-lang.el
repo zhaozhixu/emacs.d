@@ -29,6 +29,9 @@
   ;; is raised via ec's ulimit and /Library/LaunchDaemons/limit.maxfiles.
   ;; The threshold acts as a circuit breaker well below the 65536 limit.
   (lsp-file-watch-threshold 20000)
+  ;; Compiler-accurate identifier colors (clangd etc.) layered on top
+  ;; of the mode's own font-lock.
+  (lsp-semantic-tokens-enable t)
   (lsp-lens-enable nil)
   (lsp-disabled-clients '(ts-ls))
   :hook (((typescript-ts-mode tsx-ts-mode js-ts-mode vue-mode) . lsp-deferred)
@@ -45,6 +48,29 @@
   ;; lsp seems to use this func even when no X
   (if (not (boundp 'x-hide-tip))
       (defun x-hide-tip () nil)))
+
+;; Semantic tokens paint every reference (calls, variables, operators,
+;; struct/class members), which is too busy.  Drop those token faces so
+;; the mode's own level-3 treesit fontification shows through
+;; (python-like calm), and keep the high-value tokens: macros, types,
+;; enum members, inactive #ifdef regions.  Definitions keep their
+;; treesit colors.
+;; (Both alists are defvar-local, hence setq-default; the face map is
+;; cached per lsp workspace, so changes need `lsp-workspace-restart'.)
+(with-eval-after-load 'lsp-semantic-tokens
+  (setq-default lsp-semantic-token-faces
+                (seq-remove (lambda (cell)
+                              (member (car cell)
+                                      '("function" "method" "variable"
+                                        "parameter" "operator"
+                                        "member" "property")))
+                            (default-value 'lsp-semantic-token-faces)))
+  (setq-default lsp-semantic-token-modifier-faces
+                (seq-remove (lambda (cell)
+                              (member (car cell)
+                                      '("declaration" "definition"
+                                        "implementation" "static")))
+                            (default-value 'lsp-semantic-token-modifier-faces))))
 
 (use-package lsp-ui
   :ensure t)
