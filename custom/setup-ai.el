@@ -22,6 +22,10 @@
   ;; long-connection.  Deny-all until the allowlist is set; see
   ;; commentary in agent-shell-lark.el.
   (require 'agent-shell-lark)
+  ;; Stream progress summaries during long turns and ping with an
+  ;; at-mention when a turn completes.
+  (setq agent-shell-lark-relay-progress-messages t)
+  (setq agent-shell-lark-mention-on-turn-complete t)
   ;; Private settings (e.g. agent-shell-lark-allowed-open-ids) stay
   ;; out of this repo; keep them in ~/.emacs.private.el.
   (when (file-exists-p "~/.emacs.private.el")

@@ -164,10 +164,25 @@ from the session transcript when the turn completes."
   'agent-shell-lark-relay-progress-messages "0.58")
 
 (defcustom agent-shell-lark-relay-progress-messages nil
-  "When non-nil, relay assistant messages that follow tool use.
+  "When non-nil, relay assistant progress messages to the bound chat.
 
-Approximated by accumulating `agent-message-chunk' text between tool
-calls; a message segment is relayed when the next tool call closes it."
+Progress messages are the text segments the assistant writes between
+tool calls (typically the short summaries after a thinking block),
+which otherwise stay invisible from Lark during long turns.
+Approximated by accumulating `agent-message-chunk' text; a segment is
+relayed when the next tool call closes it.  The turn's final segment
+is covered by `agent-shell-lark-relay-turn-complete' instead."
+  :type 'boolean
+  :group 'agent-shell-lark)
+
+(defcustom agent-shell-lark-mention-on-turn-complete nil
+  "When non-nil, at-mention allowed users when a turn completes.
+
+The mention (every open_id in `agent-shell-lark-allowed-open-ids')
+is appended to the relayed final message -- at tags render as
+mentions in both text and markdown messages.  When
+`agent-shell-lark-relay-turn-complete' is nil, a small separate text
+ping is sent instead."
   :type 'boolean
   :group 'agent-shell-lark)
 
@@ -307,9 +322,7 @@ consumer is running."
                         (cons :subscriptions nil)
                         (cons :pending nil)
                         (cons :tool-call-status nil)
-                        (cons :progress-text "")
-                        (cons :progress-after-tool nil)
-                        (cons :last-was-tool nil)))
+                        (cons :progress-text "")))
       (setq agent-shell-lark--state state)
       (agent-shell-lark--subscribe shell-buffer state)
       (agent-shell-lark--register-responder)
@@ -735,13 +748,17 @@ EVENT is the `turn-complete' event alist."
       (agent-shell-lark--send
        state (concat agent-shell-thought-process-icon " " summary))))
   (map-put! state :progress-text "")
-  (map-put! state :progress-after-tool nil)
-  (map-put! state :last-was-tool nil)
-  (when agent-shell-lark-relay-turn-complete
-    (let ((text (or (agent-shell-lark--last-agent-message (map-elt state :buffer))
-                    (format "(turn complete: %s)"
-                            (map-nested-elt event '(:data :stop-reason))))))
-      (agent-shell-lark--send state (concat "\U0001F916 " text)))))
+  (let ((mention (and agent-shell-lark-mention-on-turn-complete
+                      (agent-shell-lark--mention-string))))
+    (if agent-shell-lark-relay-turn-complete
+        (let ((text (or (agent-shell-lark--last-agent-message (map-elt state :buffer))
+                        (format "(turn complete: %s)"
+                                (map-nested-elt event '(:data :stop-reason))))))
+          (agent-shell-lark--send
+           state (concat "\U0001F916 " text
+                         (if mention (concat "\n\n" mention " ✅") ""))))
+      (when mention
+        (agent-shell-lark--send-mention state)))))
 
 (defun agent-shell-lark--last-thoughts (shell-buffer)
   "Return SHELL-BUFFER's last thoughts section from its transcript, or nil.
@@ -766,14 +783,11 @@ transcript's final \"## Agent's Thoughts\" section at end of turn."
 (defun agent-shell-lark--on-agent-message-chunk (state event)
   "Accumulate EVENT's text chunk on STATE for progress relay.
 
-Text that starts right after a tool call is marked as a progress
-message; `agent-shell-lark--on-tool-call-update' relays it when the
-next tool call closes it."
+The accumulated segment is relayed by
+`agent-shell-lark--on-tool-call-update' when the next tool call
+closes it."
   (when agent-shell-lark-relay-progress-messages
     (when-let* ((chunk (map-nested-elt event '(:data :text-chunk))))
-      (when (string-empty-p (or (map-elt state :progress-text) ""))
-        (map-put! state :progress-after-tool (map-elt state :last-was-tool)))
-      (map-put! state :last-was-tool nil)
       (map-put! state :progress-text
                 (concat (map-elt state :progress-text) chunk)))))
 
@@ -794,17 +808,14 @@ next tool call closes it."
 EVENT is a `tool-call-update' event alist.  To avoid duplicate
 messages (the event fires on both creation and each update), only
 status transitions are relayed, tracked per tool-call id on STATE."
-  ;; A tool call closes any assistant text preceding it; relay that text
-  ;; when it itself followed a tool call (a progress message).
-  (when (and agent-shell-lark-relay-progress-messages
-             (map-elt state :progress-after-tool))
+  ;; A tool call closes any assistant text preceding it; relay that
+  ;; segment as a progress message.
+  (when agent-shell-lark-relay-progress-messages
     (when-let* ((text (string-trim (or (map-elt state :progress-text) "")))
                 ((not (string-empty-p text))))
       (agent-shell-lark--send
        state (concat "💬 " (agent-shell-lark--truncate text)))))
   (map-put! state :progress-text "")
-  (map-put! state :progress-after-tool nil)
-  (map-put! state :last-was-tool t)
   (when agent-shell-lark-relay-tool-calls
     (agent-shell-lark--relay-tool-status state event)))
 
@@ -865,6 +876,29 @@ status transitions are relayed, tracked per tool-call id on STATE."
 (defun agent-shell-lark--session-label (shell-buffer)
   "Return a short human label identifying SHELL-BUFFER's session."
   (buffer-name shell-buffer))
+
+(defun agent-shell-lark--mention-string ()
+  "Return an at-mention string for all allowed users, or nil."
+  (when agent-shell-lark-allowed-open-ids
+    (mapconcat (lambda (id) (format "<at user_id=\"%s\"></at>" id))
+               agent-shell-lark-allowed-open-ids " ")))
+
+(defun agent-shell-lark--send-mention (state)
+  "At-mention all allowed users in STATE's chat with a short text ping."
+  (when-let* ((chat-id (map-elt state :chat-id))
+              (mention (agent-shell-lark--mention-string)))
+    (make-process
+     :name "agent-shell-lark-send"
+     :buffer (get-buffer-create " *agent-shell-lark-send*")
+     :connection-type 'pipe
+     :command (list "timeout"
+                    (number-to-string agent-shell-lark-command-timeout)
+                    agent-shell-lark-cli-command
+                    "im" "+messages-send"
+                    "--as" "bot"
+                    "--chat-id" chat-id
+                    "--text"
+                    (concat mention " ✅ turn complete")))))
 
 (defun agent-shell-lark--send (state text)
   "Send TEXT to the Lark chat bound to STATE.
