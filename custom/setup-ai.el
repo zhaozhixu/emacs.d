@@ -26,6 +26,9 @@
   ;; at-mention when a turn completes.
   (setq agent-shell-lark-relay-progress-messages t)
   (setq agent-shell-lark-mention-on-turn-complete t)
+  ;; $$...$$ blocks go out as rendered images (needs node + rsvg-convert
+  ;; and a one-time `npm install' in ~/.emacs.d/lark-tools/).
+  (setq agent-shell-lark-render-formulas t)
   ;; Private settings (e.g. agent-shell-lark-allowed-open-ids) stay
   ;; out of this repo; keep them in ~/.emacs.private.el.
   (when (file-exists-p "~/.emacs.private.el")

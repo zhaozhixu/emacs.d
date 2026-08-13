@@ -68,6 +68,22 @@
 ;;      `agent-shell-lark-start'.
 ;;   3. Message the bot from Lark to drive the shell.
 ;;
+;; Optional, for `agent-shell-lark-render-formulas' ($$...$$ blocks
+;; sent as rendered images; Lark IM has no native formula support):
+;;
+;;   - node on PATH, plus a one-time `npm install' in
+;;     `agent-shell-lark-formula-tools-directory' (~/.emacs.d/lark-tools,
+;;     fetches MathJax for the bundled tex2svg.js).
+;;   - rsvg-convert on PATH, to rasterize the SVG (the Feishu image API
+;;     rejects SVG uploads).  Not shipped with macOS; it comes from
+;;     librsvg, which Homebrew's emacs-plus already pulls in as a
+;;     dependency (brew install librsvg otherwise; on Debian/Ubuntu:
+;;     apt install librsvg2-bin).
+;;
+;;   When any piece is missing the feature degrades silently to
+;;   sending the original text; rendered formulas and their uploaded
+;;   image keys are cached by content hash under ~/.cache/agent-shell-lark.
+;;
 ;; Prerequisites are the user's responsibility; this file only shells
 ;; out to `lark-cli' and cannot verify console configuration.
 ;;
@@ -196,6 +212,26 @@ place to show the outcome.  Requires the app to have the
 When nil, fall back to the reply-based flow (numbered text options
 answered by replying in the chat)."
   :type 'boolean
+  :group 'agent-shell-lark)
+
+(defcustom agent-shell-lark-render-formulas nil
+  "When non-nil, render $$...$$ blocks in outbound text as images.
+
+Each display formula is rendered locally (MathJax via node, then
+rsvg-convert to PNG), uploaded once (cached by formula hash), and the
+$$...$$ block is replaced with an inline image so the formula shows
+rendered inside the normal markdown message.  Inline $...$ is left
+alone (too easy to confuse with shell variables and code).  When the
+tool chain is unavailable or any step fails, the text is sent
+unchanged.  Requires node and rsvg-convert on PATH and a one-time
+`npm install' in `agent-shell-lark-formula-tools-directory'."
+  :type 'boolean
+  :group 'agent-shell-lark)
+
+(defcustom agent-shell-lark-formula-tools-directory
+  (expand-file-name "lark-tools" user-emacs-directory)
+  "Directory holding tex2svg.js and its node_modules (MathJax)."
+  :type 'directory
   :group 'agent-shell-lark)
 
 (defcustom agent-shell-lark-label-outbound t
@@ -877,6 +913,142 @@ status transitions are relayed, tracked per tool-call id on STATE."
   "Return a short human label identifying SHELL-BUFFER's session."
   (buffer-name shell-buffer))
 
+;;; Formula rendering ($$...$$ -> embedded image)
+
+(defconst agent-shell-lark--formula-regexp "\\$\\$\\([^$]+\\)\\$\\$"
+  "Matches a display formula; group 1 is the TeX source.")
+
+(defvar agent-shell-lark--formula-keys nil
+  "Alist of (FORMULA-SHA1 . IMAGE-KEY) for uploaded formula images.")
+
+(defun agent-shell-lark--formula-tools-ready-p ()
+  "Non-nil when the formula rendering tool chain is available."
+  (and (executable-find "node")
+       (executable-find "rsvg-convert")
+       (file-exists-p (expand-file-name
+                       "tex2svg.js" agent-shell-lark-formula-tools-directory))
+       (file-directory-p (expand-file-name
+                          "node_modules/mathjax"
+                          agent-shell-lark-formula-tools-directory))))
+
+(defun agent-shell-lark--formula-cache-dir ()
+  "Return the cache directory for rendered formulas, creating it."
+  (let ((dir (expand-file-name "agent-shell-lark"
+                               (or (getenv "XDG_CACHE_HOME") "~/.cache"))))
+    (make-directory dir t)
+    dir))
+
+(defun agent-shell-lark--formulas-in (text)
+  "Return the unique TeX sources of display formulas in TEXT."
+  (let ((start 0) (formulas ()))
+    (while (string-match agent-shell-lark--formula-regexp text start)
+      (push (match-string 1 text) formulas)
+      (setq start (match-end 0)))
+    (seq-uniq (nreverse formulas))))
+
+(defun agent-shell-lark--replace-formulas (text)
+  "Replace TEXT's display formulas with image references where known."
+  (replace-regexp-in-string
+   agent-shell-lark--formula-regexp
+   (lambda (match)
+     (let* ((formula (progn (string-match agent-shell-lark--formula-regexp match)
+                            (match-string 1 match)))
+            (key (cdr (assoc (sha1 formula) agent-shell-lark--formula-keys))))
+       (if key (format "![formula](%s)" key) match)))
+   text t t))
+
+(defun agent-shell-lark--formula-ensure-key (formula callback)
+  "Render and upload FORMULA, then call CALLBACK with non-nil on success.
+
+The image_key is cached in `agent-shell-lark--formula-keys'; render
+(node/MathJax), convert (rsvg-convert), and upload (lark-cli) each run
+asynchronously with a timeout, so a failure degrades to sending the
+original text rather than blocking."
+  (let* ((hash (sha1 formula))
+         (dir (agent-shell-lark--formula-cache-dir))
+         (svg (expand-file-name (concat hash ".svg") dir))
+         (png-name (concat hash ".png"))
+         (png (expand-file-name png-name dir))
+         (fail (lambda (step process)
+                 (agent-shell-lark--log
+                  "Formula %s failed at %s: %s" hash step
+                  (with-current-buffer (process-buffer process)
+                    (string-trim (buffer-string))))
+                 (funcall callback nil))))
+    (make-process
+     :name "agent-shell-lark-formula-render"
+     :buffer (generate-new-buffer " *lark-formula*")
+     :connection-type 'pipe
+     :command (list "timeout" "30" "node"
+                    (expand-file-name "tex2svg.js"
+                                      agent-shell-lark-formula-tools-directory)
+                    formula)
+     :sentinel
+     (lambda (process _change)
+       (when (memq (process-status process) '(exit signal))
+         (if (not (zerop (process-exit-status process)))
+             (funcall fail "render" process)
+           (with-current-buffer (process-buffer process)
+             (write-region (point-min) (point-max) svg nil 'silent))
+           (make-process
+            :name "agent-shell-lark-formula-convert"
+            :buffer (generate-new-buffer " *lark-formula*")
+            :connection-type 'pipe
+            :command (list "timeout" "30" "rsvg-convert" "--zoom" "3"
+                           "--background-color" "white" "-o" png svg)
+            :sentinel
+            (lambda (process _change)
+              (when (memq (process-status process) '(exit signal))
+                (if (not (zerop (process-exit-status process)))
+                    (funcall fail "convert" process)
+                  ;; lark-cli only accepts relative file paths.
+                  (let ((default-directory dir))
+                    (make-process
+                     :name "agent-shell-lark-formula-upload"
+                     :buffer (generate-new-buffer " *lark-formula*")
+                     :connection-type 'pipe
+                     :command (list "timeout"
+                                    (number-to-string agent-shell-lark-command-timeout)
+                                    agent-shell-lark-cli-command
+                                    "im" "images" "create"
+                                    "--data" "{\"image_type\":\"message\"}"
+                                    "--file" (concat "./" png-name))
+                     :sentinel
+                     (lambda (process _change)
+                       (when (memq (process-status process) '(exit signal))
+                         (let ((output (with-current-buffer (process-buffer process)
+                                         (buffer-string))))
+                           (if (and (zerop (process-exit-status process))
+                                    (string-match "\"image_key\"[: ]*\"\\([^\"]+\\)\"" output))
+                               (progn
+                                 (push (cons hash (match-string 1 output))
+                                       agent-shell-lark--formula-keys)
+                                 (funcall callback t))
+                             (funcall fail "upload" process)))))))))))))))))
+
+(defun agent-shell-lark--send-with-formulas (state text)
+  "Send TEXT to STATE's chat with its display formulas embedded as images."
+  (let* ((formulas (agent-shell-lark--formulas-in text))
+         (missing (seq-remove (lambda (formula)
+                                (assoc (sha1 formula) agent-shell-lark--formula-keys))
+                              formulas))
+         (pending (length missing))
+         (failed nil)
+         (finish (lambda ()
+                   (agent-shell-lark--send-plain
+                    state
+                    (if failed text (agent-shell-lark--replace-formulas text))))))
+    (if (zerop pending)
+        (funcall finish)
+      (dolist (formula missing)
+        (agent-shell-lark--formula-ensure-key
+         formula
+         (lambda (ok)
+           (unless ok (setq failed t))
+           (setq pending (1- pending))
+           (when (zerop pending)
+             (funcall finish))))))))
+
 (defun agent-shell-lark--mention-string ()
   "Return an at-mention string for all allowed users, or nil."
   (when agent-shell-lark-allowed-open-ids
@@ -902,6 +1074,17 @@ status transitions are relayed, tracked per tool-call id on STATE."
 
 (defun agent-shell-lark--send (state text)
   "Send TEXT to the Lark chat bound to STATE.
+
+When `agent-shell-lark-render-formulas' is enabled and TEXT contains
+display formulas, they are rendered and embedded as images first."
+  (if (and agent-shell-lark-render-formulas
+           (string-match-p agent-shell-lark--formula-regexp text)
+           (agent-shell-lark--formula-tools-ready-p))
+      (agent-shell-lark--send-with-formulas state text)
+    (agent-shell-lark--send-plain state text)))
+
+(defun agent-shell-lark--send-plain (state text)
+  "Send TEXT to the Lark chat bound to STATE as-is.
 
 Runs `lark-cli im +messages-send' asynchronously as the bot identity.
 Does nothing when the session has no bound chat yet."

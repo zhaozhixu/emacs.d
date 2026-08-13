@@ -1,0 +1,8 @@
+{
+  "name": "lark-tools",
+  "private": true,
+  "description": "Local tooling for agent-shell-lark: MathJax renders $$...$$ to SVG (see tex2svg.js); rsvg-convert turns it into PNG for Lark image embeds.",
+  "dependencies": {
+    "mathjax": "^3"
+  }
+}

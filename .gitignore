@@ -3,6 +3,10 @@
 !init.el
 !bin
 !bin/*
+!lark-tools
+!lark-tools/package.json
+!lark-tools/package-lock.json
+!lark-tools/tex2svg.js
 !custom
 !custom/*.el
 !custom/unused
