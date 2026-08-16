@@ -20,13 +20,15 @@
 (require 'map)
 (require 'seq)
 
-(defvar my/agent-shell-retry-max-retries 2
+(defvar my/agent-shell-retry-max-retries 5
   "Maximum auto-retry turns per user prompt before giving up.")
 
-(defvar my/agent-shell-retry-backoff-seconds '(2 5)
+(defvar my/agent-shell-retry-backoff-seconds '(5 10 20 40 80)
   "Backoff delays indexed by 1-based retry number; last entry repeats.")
 
-(defvar my/agent-shell-retry-regexps '("^Error: RetriableError:")
+(defvar my/agent-shell-retry-regexps
+  '("^Error: RetriableError:"
+    "exceeded retry limit, last status:[[:space:]]*429[[:space:]]+Too Many Requests$")
   "Case-insensitive patterns a turn's final line must match to retry.")
 
 (defvar my/agent-shell-retry-prompt
