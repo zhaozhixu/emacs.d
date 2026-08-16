@@ -179,7 +179,7 @@ from the session transcript when the turn completes."
 (define-obsolete-variable-alias 'agent-shell-lark-relay-post-tool-messages
   'agent-shell-lark-relay-progress-messages "0.58")
 
-(defcustom agent-shell-lark-relay-progress-messages nil
+(defcustom agent-shell-lark-relay-progress-messages t
   "When non-nil, relay assistant progress messages to the bound chat.
 
 Progress messages are the text segments the assistant writes between
@@ -191,7 +191,7 @@ is covered by `agent-shell-lark-relay-turn-complete' instead."
   :type 'boolean
   :group 'agent-shell-lark)
 
-(defcustom agent-shell-lark-mention-on-turn-complete nil
+(defcustom agent-shell-lark-mention-on-turn-complete t
   "When non-nil, at-mention allowed users when a turn completes.
 
 The mention (every open_id in `agent-shell-lark-allowed-open-ids')
@@ -759,6 +759,12 @@ completes."
              (agent-shell-lark--on-tool-call-update state event)))
           (agent-shell-subscribe-to
            :shell-buffer shell-buffer
+           :event 'permission-response
+           :on-event
+           (lambda (_event)
+             (map-put! state :pending nil)))
+          (agent-shell-subscribe-to
+           :shell-buffer shell-buffer
            :event 'error
            :on-event
            (lambda (event)
@@ -804,17 +810,18 @@ transcript's final \"## Agent's Thoughts\" section at end of turn."
   (when-let* ((file (buffer-local-value 'agent-shell--transcript-file shell-buffer))
               ((stringp file))
               ((file-exists-p file)))
-    (with-temp-buffer
-      (insert-file-contents file)
-      (goto-char (point-max))
-      (when (re-search-backward "^## Agent's Thoughts (" nil t)
-        (forward-line 1)
-        (let ((start (point)))
-          (buffer-substring-no-properties
-           start
-           (if (re-search-forward "^## " nil t)
-               (match-beginning 0)
-             (point-max))))))))
+    (let ((coding-system-for-read 'utf-8))
+      (with-temp-buffer
+        (insert-file-contents file)
+        (goto-char (point-max))
+        (when (re-search-backward "^## Agent's Thoughts (" nil t)
+          (forward-line 1)
+          (let ((start (point)))
+            (buffer-substring-no-properties
+             start
+             (if (re-search-forward "^## " nil t)
+                 (match-beginning 0)
+               (point-max)))))))))
 
 (defun agent-shell-lark--on-agent-message-chunk (state event)
   "Accumulate EVENT's text chunk on STATE for progress relay.
@@ -892,15 +899,16 @@ status transitions are relayed, tracked per tool-call id on STATE."
   (when-let* ((file (buffer-local-value 'agent-shell--transcript-file shell-buffer))
               ((stringp file))
               ((file-exists-p file)))
-    (with-temp-buffer
-      (insert-file-contents file)
-      (goto-char (point-max))
-      (when (re-search-backward "^## Agent (" nil t)
-        (forward-line 1)
-        (let ((text (string-trim (buffer-substring-no-properties
-                                  (point) (point-max)))))
-          (unless (string-empty-p text)
-            (agent-shell-lark--truncate text)))))))
+    (let ((coding-system-for-read 'utf-8))
+      (with-temp-buffer
+        (insert-file-contents file)
+        (goto-char (point-max))
+        (when (re-search-backward "^## Agent (" nil t)
+          (forward-line 1)
+          (let ((text (string-trim (buffer-substring-no-properties
+                                    (point) (point-max)))))
+            (unless (string-empty-p text)
+              (agent-shell-lark--truncate text))))))))
 
 (defun agent-shell-lark--truncate (text)
   "Truncate TEXT to `agent-shell-lark-max-message-length'."
@@ -1157,8 +1165,7 @@ per connection, not across sessions."
 (defun agent-shell-lark--responder (permission)
   "Relay PERMISSION to the owning session's Lark chat.
 
-Returns non-nil (handled, local UI skipped) when relayed to a bound
-chat; nil to fall back to the interactive dialog."
+Returns nil so the interactive permission dialog is also shown locally."
   (when-let* ((tool-call (map-elt permission :tool-call))
               (state (agent-shell-lark--bridge-for-tool-call tool-call))
               ((map-elt state :chat-id))
@@ -1175,7 +1182,7 @@ chat; nil to fall back to the interactive dialog."
          state (agent-shell-lark--approval-text title options)))
       (agent-shell-lark--log "Permission relayed to %s: %s"
                                (buffer-name (map-elt state :buffer)) title)
-      t)))
+      nil)))
 
 (defun agent-shell-lark--option-kind-allow-p (option)
   "Return non-nil when OPTION's :kind is an allow variant."
