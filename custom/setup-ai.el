@@ -22,10 +22,6 @@
   ;; long-connection.  Deny-all until the allowlist is set; see
   ;; commentary in agent-shell-lark.el.
   (require 'agent-shell-lark)
-  ;; Stream progress summaries during long turns and ping with an
-  ;; at-mention when a turn completes.
-  (setq agent-shell-lark-relay-progress-messages t)
-  (setq agent-shell-lark-mention-on-turn-complete t)
   ;; $$...$$ blocks go out as rendered images (needs node + rsvg-convert
   ;; and a one-time `npm install' in ~/.emacs.d/lark-tools/).
   (setq agent-shell-lark-render-formulas t)
@@ -34,7 +30,7 @@
   (when (file-exists-p "~/.emacs.private.el")
     (load (expand-file-name "~/.emacs.private.el") nil t))
 
-  (global-set-key (kbd "C-c a o") #'agent-shell-start-codex)
+  (global-set-key (kbd "C-c a o") #'agent-shell-openai-start-codex)
   (global-set-key (kbd "C-c a u") #'agent-shell-cursor-start-agent)
   (global-set-key (kbd "C-c a l") #'agent-shell-anthropic-start-claude-code)
   (global-set-key (kbd "C-c a a") #'agent-shell)
