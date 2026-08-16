@@ -9,7 +9,6 @@
       inhibit-startup-message t
       cjk-font-size 30
       ansi-font-size 30
-      system-uses-terminfo nil
       term-buffer-maximum-size 81920
       tool-bar-mode nil
       tooltip-mode -1
@@ -17,25 +16,37 @@
 (run-with-idle-timer 2 t (lambda () (garbage-collect)))
 
 (defun set-exec-path-from-shell-PATH ()
-  "Set up Emacs' `exec-path' and PATH environment variable to match
-that used by the user's shell.
+  "Set `exec-path' and PATH from the user's login shell.
 
-This is particularly useful under Mac OS X and macOS, where GUI
-apps are not started from a shell."
+Use a non-interactive shell and a marker so login banners and other
+startup output cannot be mistaken for part of PATH."
   (interactive)
-  (let ((path-from-shell (replace-regexp-in-string
-			              "[ \t\n]*$" "" (shell-command-to-string
-					                      "$SHELL --login -i -c 'echo $PATH'"
-						                  ))))
-    (setenv "PATH" path-from-shell)
-    (setq exec-path (split-string path-from-shell path-separator))))
+  (let* ((marker "__EMACS_PATH__")
+         (shell (or (getenv "SHELL") shell-file-name))
+         (lines (process-lines
+                 shell "--login" "-c"
+                 (concat "printf '" marker "%s\\n' \"$PATH\"")))
+         (path-from-shell
+          (catch 'path
+            (dolist (line lines)
+              (when (string-match
+                     (concat "\\`" marker "\\(.*\\)\\'") line)
+                (throw 'path (match-string 1 line)))))))
+    (when path-from-shell
+      (setenv "PATH" path-from-shell)
+      (setq exec-path (split-string path-from-shell path-separator t)))))
 
-(set-exec-path-from-shell-PATH)
+;; Keep the PATH inherited by Emacs.  On this Linux host it contains the
+;; active NVM installation (including codex-acp), while `bash --login'
+;; does not.  The helper remains available for platforms that need it.
+;; (set-exec-path-from-shell-PATH)
 
 (define-key key-translation-map (kbd "<menu>") #'event-apply-super-modifier) ; super key
 (global-set-key (kbd "C-x C-b") 'ibuffer)
 (windmove-default-keybindings)
 (column-number-mode t)
+(menu-bar-mode -1)
+(show-paren-mode 1)
 ;; (global-linum-mode t)
 (put 'set-goal-column 'disabled nil) ; unknown usage
 

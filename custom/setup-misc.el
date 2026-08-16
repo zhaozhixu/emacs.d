@@ -1,15 +1,62 @@
 ;; Appearance
-(load-theme 'deeper-blue t)
-(enable-theme 'deeper-blue)
-(if (daemonp)
-    (add-hook 'after-make-frame-functions
-              (lambda (frame)
-                (select-frame frame)
-                (if (not (display-graphic-p frame))
-                    (set-background-color "black"))
-                ))
-  (if (not (display-graphic-p))
-      (add-to-list 'default-frame-alist '(background-color . "black"))))
+(setq modus-themes-bold-constructs t
+      modus-themes-completions
+      '((matches . (extrabold))
+        (selection . (semibold)))
+      modus-themes-prompts '(semibold)
+      modus-themes-headings
+      '((1 . (bold 1.15))
+        (2 . (semibold 1.1))
+        (t . (semibold)))
+      modus-themes-common-palette-overrides
+      '((bg-mode-line-active bg-blue-subtle)
+        (border-mode-line-active blue)
+        (bg-mode-line-inactive bg-dim)
+        (border-mode-line-inactive bg-dim)
+        (bg-region bg-blue-subtle)
+        (fringe unspecified)))
+
+(defconst my-modern-theme 'modus-vivendi)
+(defconst my-legacy-theme 'deeper-blue)
+
+(defun my-apply-theme-frame-adjustments (frame)
+  "Apply theme-specific adjustments to FRAME."
+  (when (and (eq (car custom-enabled-themes) my-legacy-theme)
+             (not (display-graphic-p frame)))
+    ;; Preserve the old deeper-blue terminal appearance.
+    (set-face-background 'default "black" frame)))
+
+(defun my-apply-theme-adjustments-to-existing-frames ()
+  "Apply theme-specific adjustments to all existing frames."
+  (dolist (frame (frame-list))
+    (my-apply-theme-frame-adjustments frame)))
+
+(defun my-load-theme (theme)
+  "Load THEME without blending it with an already enabled theme."
+  (interactive
+   (list (intern
+          (completing-read "Theme: "
+                           (mapcar #'symbol-name
+                                   (list my-modern-theme my-legacy-theme))
+                           nil t))))
+  (mapc #'disable-theme custom-enabled-themes)
+  (load-theme theme t)
+  (my-apply-theme-adjustments-to-existing-frames)
+  (message "Loaded theme: %s" theme))
+
+(defun my-toggle-theme ()
+  "Toggle between the modern and legacy dark themes."
+  (interactive)
+  (my-load-theme
+   (if (eq (car custom-enabled-themes) my-modern-theme)
+       my-legacy-theme
+     my-modern-theme)))
+
+(add-hook 'after-make-frame-functions #'my-apply-theme-frame-adjustments)
+(add-hook 'emacs-startup-hook #'my-apply-theme-adjustments-to-existing-frames)
+(my-load-theme my-legacy-theme)
+
+(add-hook 'prog-mode-hook #'hl-line-mode)
 
 (global-set-key [(f11)] 'loop-alpha)
 (setq alpha-list '((100 100) (95 65) (85 55) (75 45) (65 35)))
@@ -113,7 +160,7 @@ Operate on selected region on whole buffer."
 
 ;; Package: projectile
 (use-package projectile
-  :hook (after-init . projectile-global-mode)
+  :hook (after-init . projectile-mode)
   :config (setq projectile-enable-caching t))
 
 ;; Package: helm-projectile
