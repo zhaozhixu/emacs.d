@@ -45,7 +45,7 @@ startup output cannot be mistaken for part of PATH."
 (global-set-key (kbd "C-x C-b") 'ibuffer)
 (windmove-default-keybindings)
 (column-number-mode t)
-(menu-bar-mode -1)
+(menu-bar-mode t)
 (show-paren-mode 1)
 ;; (global-linum-mode t)
 (put 'set-goal-column 'disabled nil) ; unknown usage
