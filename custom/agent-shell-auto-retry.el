@@ -4,9 +4,9 @@
 ;; (`agent-message-chunk' added in agent-shell 0.70.2 for this use
 ;; case) after upstream preferred this live outside core.
 ;;
-;; Enable per shell with M-x my/agent-shell-retry-mode, or everywhere
-;; with M-x my/agent-shell-global-retry-mode (or from config:
-;; (my/agent-shell-global-retry-mode 1)).
+;; The mode is enabled automatically for every fully initialized
+;; `agent-shell' buffer via `agent-shell-mode-hook'.  Toggle it manually
+;; with M-x my/agent-shell-retry-mode when needed.
 ;;
 ;; Known limitation vs an in-core implementation: there is no
 ;; interrupt event, so interrupting during the backoff window does not
@@ -53,6 +53,9 @@
 (defvar-local my/agent-shell-retry--subscriptions nil
   "Event subscription tokens while the mode is enabled.")
 
+(defvar-local my/agent-shell-retry--exhausted nil
+  "Non-nil after the current prompt has exhausted automatic retries.")
+
 (defun my/agent-shell-retry--tail-line (text)
   "Return TEXT's final non-blank line when it matches a retriable pattern."
   (when-let* ((line (car (last (seq-remove #'string-empty-p
@@ -93,37 +96,48 @@ prompt, so a retry turn can quote the request that failed."
       (cancel-timer my/agent-shell-retry--timer))
     (setq my/agent-shell-retry--timer nil)
     (setq my/agent-shell-retry--attempt 0)
+    (setq my/agent-shell-retry--exhausted nil)
     (when-let* ((prompt (map-nested-elt event '(:data :prompt))))
       (setq my/agent-shell-retry--last-user-prompt prompt)))
   (setq my/agent-shell-retry--tail ""))
 
 (defun my/agent-shell-retry--on-turn-complete (event)
-  "Schedule a retry when EVENT ended a turn on a retriable final line."
+  "Retry a retriable EVENT, or emit `retry-exhausted' after the last try."
   (when-let* (((equal (map-nested-elt event '(:data :stop-reason)) "end_turn"))
-              ((< my/agent-shell-retry--attempt my/agent-shell-retry-max-retries))
-              (line (my/agent-shell-retry--tail-line my/agent-shell-retry--tail))
-              (buffer (current-buffer)))
-    (setq my/agent-shell-retry--attempt (1+ my/agent-shell-retry--attempt))
-    (let ((delay (or (nth (1- my/agent-shell-retry--attempt)
-                          my/agent-shell-retry-backoff-seconds)
-                     (car (last my/agent-shell-retry-backoff-seconds))
-                     0)))
-      (message "agent-shell auto-retry: %s (retry %d/%d in %ds)"
-               line my/agent-shell-retry--attempt
-               my/agent-shell-retry-max-retries delay)
-      (setq my/agent-shell-retry--timer
-            (run-at-time
-             delay nil
-             (lambda ()
-               (when (buffer-live-p buffer)
-                 (with-current-buffer buffer
-                   (setq my/agent-shell-retry--timer nil)
-                   (setq my/agent-shell-retry--own-submit t)
-                   (message "agent-shell auto-retry: sending retry %d/%d"
-                            my/agent-shell-retry--attempt
-                            my/agent-shell-retry-max-retries)
-                   (agent-shell-prompt-queue
-                    (my/agent-shell-retry--compose-prompt))))))))))
+              (line (my/agent-shell-retry--tail-line my/agent-shell-retry--tail)))
+    (if (< my/agent-shell-retry--attempt my/agent-shell-retry-max-retries)
+        (let ((buffer (current-buffer)))
+          (setq my/agent-shell-retry--attempt
+                (1+ my/agent-shell-retry--attempt))
+          (let ((delay (or (nth (1- my/agent-shell-retry--attempt)
+                                my/agent-shell-retry-backoff-seconds)
+                           (car (last my/agent-shell-retry-backoff-seconds))
+                           0)))
+            (message "agent-shell auto-retry: %s (retry %d/%d in %ds)"
+                     line my/agent-shell-retry--attempt
+                     my/agent-shell-retry-max-retries delay)
+            (setq my/agent-shell-retry--timer
+                  (run-at-time
+                   delay nil
+                   (lambda ()
+                     (when (buffer-live-p buffer)
+                       (with-current-buffer buffer
+                         (setq my/agent-shell-retry--timer nil)
+                         (setq my/agent-shell-retry--own-submit t)
+                         (message "agent-shell auto-retry: sending retry %d/%d"
+                                  my/agent-shell-retry--attempt
+                                  my/agent-shell-retry-max-retries)
+                         (agent-shell-prompt-queue
+                          (my/agent-shell-retry--compose-prompt)))))))))
+      (unless my/agent-shell-retry--exhausted
+        (setq my/agent-shell-retry--exhausted t)
+        (message "agent-shell auto-retry: exhausted after %d attempts; waiting for input"
+                 my/agent-shell-retry--attempt)
+        (agent-shell--emit-event
+         :event 'retry-exhausted
+         :data (list (cons :attempts my/agent-shell-retry--attempt)
+                     (cons :line line)
+                     (cons :prompt my/agent-shell-retry--last-user-prompt)))))))
 
 (defun my/agent-shell-retry--subscribe ()
   "Subscribe the current shell buffer's retry event handlers."
@@ -147,23 +161,13 @@ prompt, so a retry turn can quote the request that failed."
     (cancel-timer my/agent-shell-retry--timer))
   (setq my/agent-shell-retry--timer nil)
   (setq my/agent-shell-retry--attempt 0)
+  (setq my/agent-shell-retry--exhausted nil)
   (setq my/agent-shell-retry--tail ""))
 
 (defun my/agent-shell-retry--setup ()
-  "Reset state and subscribe, deferring until the shell is initialized.
-Mode hooks can run before the shell's state exists, so when it is not
-ready yet, subscription is retried once shortly after."
+  "Reset state and subscribe in the current initialized shell."
   (my/agent-shell-retry--teardown)
-  (if (bound-and-true-p agent-shell--state)
-      (my/agent-shell-retry--subscribe)
-    (run-at-time 0.1 nil
-                 (lambda (buffer)
-                   (when (buffer-live-p buffer)
-                     (with-current-buffer buffer
-                       (when (and my/agent-shell-retry-mode
-                                  (null my/agent-shell-retry--subscriptions))
-                         (my/agent-shell-retry--subscribe)))))
-                 (current-buffer))))
+  (my/agent-shell-retry--subscribe))
 
 (define-minor-mode my/agent-shell-retry-mode
   "Auto-retry turns that end with a retriable error in this shell.
@@ -182,14 +186,13 @@ last user prompt) after a short backoff, up to
         (user-error "Not in an agent-shell buffer"))
     (my/agent-shell-retry--teardown)))
 
-(defun my/agent-shell-retry-mode--turn-on ()
-  "Turn on `my/agent-shell-retry-mode' in agent-shell buffers."
-  (when (derived-mode-p 'agent-shell-mode)
-    (my/agent-shell-retry-mode 1)))
+(defun my/agent-shell-retry-mode-enable ()
+  "Enable auto-retry in a fully initialized `agent-shell' buffer."
+  (my/agent-shell-retry-mode 1))
 
-(define-globalized-minor-mode my/agent-shell-global-retry-mode
-  my/agent-shell-retry-mode my/agent-shell-retry-mode--turn-on
-  :group 'agent-shell)
+;; Unlike a globalized minor mode, this hook is deliberately run by
+;; agent-shell only after it has installed the buffer's final state.
+(add-hook 'agent-shell-mode-hook #'my/agent-shell-retry-mode-enable)
 
 (provide 'agent-shell-auto-retry)
 

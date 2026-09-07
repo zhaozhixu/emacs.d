@@ -54,7 +54,7 @@
 
 (add-hook 'after-make-frame-functions #'my-apply-theme-frame-adjustments)
 (add-hook 'emacs-startup-hook #'my-apply-theme-adjustments-to-existing-frames)
-(my-load-theme my-legacy-theme)
+(my-load-theme my-modern-theme)
 
 (add-hook 'prog-mode-hook #'hl-line-mode)
 

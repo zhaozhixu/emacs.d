@@ -68,7 +68,8 @@
 ;;      `agent-shell-lark-start'.
 ;;   3. Message the bot from Lark to drive the shell.
 ;;
-;; Optional, for `agent-shell-lark-render-formulas' ($$...$$ blocks
+;; Optional, for `agent-shell-lark-render-formulas' ($$...$$ and
+;; \[...\] blocks
 ;; sent as rendered images; Lark IM has no native formula support):
 ;;
 ;;   - node on PATH, plus a one-time `npm install' in
@@ -88,10 +89,11 @@
 ;; out to `lark-cli' and cannot verify console configuration.
 ;;
 ;; This module targets stock agent-shell (>= 0.70.2) public events and
-;; requires no core changes.  Thinking summaries are read from the
-;; transcript at end of turn (no event streams thinking text), and
-;; post-tool progress messages are approximated by accumulating
-;; `agent-message-chunk' events between tool calls.
+;; requires no core changes.  Final replies and post-tool progress
+;; messages are accumulated from `agent-message-chunk' events instead
+;; of re-reading transcript files at turn end.  Thinking summaries, if
+;; enabled, still read from the transcript because stock agent-shell
+;; does not expose a public thought-chunk event.
 
 ;;; Code:
 
@@ -136,6 +138,37 @@ allowlist of trusted operators."
 
 (defcustom agent-shell-lark-max-message-length 24000
   "Maximum characters of agent output relayed to Lark per message."
+  :type 'integer
+  :group 'agent-shell-lark)
+
+(defcustom agent-shell-lark-reply-to-user-messages t
+  "When non-nil, send agent replies as Lark replies to user messages.
+
+The bridge stores the Lark `message_id' for prompts submitted from Lark and
+uses `lark-cli im +messages-reply' for progress, error, and turn-complete
+messages.  If replying fails, the bridge falls back to sending a normal chat
+message."
+  :type 'boolean
+  :group 'agent-shell-lark)
+
+(defcustom agent-shell-lark-reply-in-thread nil
+  "When non-nil, send Lark replies inside the target message's thread."
+  :type 'boolean
+  :group 'agent-shell-lark)
+
+(defcustom agent-shell-lark-ack-queued-prompts t
+  "When non-nil, acknowledge Lark prompts queued while the shell is busy."
+  :type 'boolean
+  :group 'agent-shell-lark)
+
+
+(defcustom agent-shell-lark-deduplicate-input-messages t
+  "When non-nil, ignore duplicate Lark message deliveries by message_id."
+  :type 'boolean
+  :group 'agent-shell-lark)
+
+(defcustom agent-shell-lark-seen-message-limit 500
+  "Maximum number of recent Lark message IDs remembered for dedupe."
   :type 'integer
   :group 'agent-shell-lark)
 
@@ -215,9 +248,10 @@ answered by replying in the chat)."
   :group 'agent-shell-lark)
 
 (defcustom agent-shell-lark-render-formulas nil
-  "When non-nil, render $$...$$ blocks in outbound text as images.
+  "When non-nil, render display-math blocks in outbound text as images.
 
-Each display formula is rendered locally (MathJax via node, then
+Both $$...$$ and \\[...\\] delimiters are recognized.  Each display
+formula is rendered locally (MathJax via node, then
 rsvg-convert to PNG), uploaded once (cached by formula hash), and the
 $$...$$ block is replaced with an inline image so the formula shows
 rendered inside the normal markdown message.  Inline $...$ is left
@@ -288,6 +322,9 @@ buttons are unambiguous even with several requests pending.")
 (defvar agent-shell-lark--awaiting-claim nil
   "Shell buffer awaiting a chat binding via the claim handshake, or nil.")
 
+(defvar agent-shell-lark--seen-message-ids nil
+  "Recent inbound Lark message IDs already handled.")
+
 (defvar-local agent-shell-lark--state nil
   "Buffer-local bridge state for an `agent-shell' buffer.
 
@@ -295,7 +332,33 @@ An alist with keys:
   :buffer        - the bridged shell buffer
   :chat-id       - the Lark chat_id bound to this session (or nil)
   :subscriptions - agent-shell event subscription tokens
-  :pending       - the in-flight permission request, or nil")
+  :pending       - the in-flight permission request, or nil
+  :progress-text - current assistant text segment, built from events
+  :pending-lark-prompts - queued prompts received from Lark, with message IDs
+  :next-lark-prompt - Lark metadata for the prompt currently being submitted
+  :current-lark-message-id - Lark message ID for the active prompt, if any")
+
+(defun agent-shell-lark--state-put (state key value)
+  "Set KEY to VALUE in STATE, adding KEY when missing.
+
+`map-put!' updates existing alist keys in place, but it does not extend an
+alist object that is shared through buffer-local bridge state.  This helper
+preserves STATE's cons-cell identity when adding migration keys to existing
+live bridges."
+  (if-let* ((cell (assq key state)))
+      (setcdr cell value)
+    (nconc state (list (cons key value))))
+  value)
+
+(defun agent-shell-lark--ensure-state-keys (state)
+  "Ensure STATE has keys added by newer bridge versions."
+  (dolist (pair '((:progress-text . "")
+                  (:pending-lark-prompts . nil)
+                  (:next-lark-prompt . nil)
+                  (:current-lark-message-id . nil)))
+    (unless (assq (car pair) state)
+      (nconc state (list pair))))
+  state)
 
 ;;; Logging
 
@@ -321,6 +384,93 @@ FORMAT-STRING and ARGS are passed to `format'."
     (error
      (agent-shell-lark--log "JSON parse error: %s" (error-message-string err))
      nil)))
+
+(defun agent-shell-lark--event-message-id (event)
+  "Return EVENT's stable Lark message ID, or nil.
+
+The CLI exposes `message_id' and keeps `id' as a legacy alias.  Do not use
+`event_id' for deduplication because it changes across redeliveries."
+  (or (map-elt event 'message_id)
+      (map-elt event 'id)))
+
+(defun agent-shell-lark--seen-message-p (message-id)
+  "Return non-nil if MESSAGE-ID has already been handled."
+  (and agent-shell-lark-deduplicate-input-messages
+       message-id
+       (member message-id agent-shell-lark--seen-message-ids)))
+
+(defun agent-shell-lark--remember-message-id (message-id)
+  "Remember MESSAGE-ID for inbound deduplication."
+  (when (and agent-shell-lark-deduplicate-input-messages
+             message-id
+             (not (member message-id agent-shell-lark--seen-message-ids)))
+    (setq agent-shell-lark--seen-message-ids
+          (cons message-id
+                (seq-take (seq-remove
+                           (lambda (seen) (equal seen message-id))
+                           agent-shell-lark--seen-message-ids)
+                          (max 0 (1- agent-shell-lark-seen-message-limit)))))))
+
+(defun agent-shell-lark--one-line-preview (text)
+  "Return a short one-line preview of TEXT."
+  (truncate-string-to-width
+   (string-join (split-string (string-trim (or text ""))) " ")
+   180 nil nil "..."))
+
+(defun agent-shell-lark--prompt-meta (event text)
+  "Return Lark metadata for inbound prompt EVENT with TEXT."
+  (list (cons :message-id (agent-shell-lark--event-message-id event))
+        (cons :chat-id (map-elt event 'chat_id))
+        (cons :text text)))
+
+(defun agent-shell-lark--take-pending-prompt (state prompt)
+  "Pop and return Lark metadata from STATE matching PROMPT."
+  (let ((pending (map-elt state :pending-lark-prompts))
+        match rest)
+    (dolist (meta pending)
+      (if (and (null match)
+               (or (null prompt)
+                   (equal (map-elt meta :text) prompt)))
+          (setq match meta)
+        (push meta rest)))
+    (when match
+      (agent-shell-lark--state-put state :pending-lark-prompts (nreverse rest)))
+    match))
+
+(defun agent-shell-lark--on-input-submitted (state event)
+  "Reset reply accumulation and associate the running turn with Lark EVENT."
+  (agent-shell-lark--ensure-state-keys state)
+  (agent-shell-lark--state-put state :progress-text "")
+  (let* ((prompt (map-nested-elt event '(:data :prompt)))
+         ;; Auto-retry prompts are internal continuations of the same user turn;
+         ;; keep replying to the original Lark message when possible.
+         (auto-retry (and (stringp prompt)
+                          (string-prefix-p "[auto-retry]" prompt)))
+         (next (map-elt state :next-lark-prompt))
+         (meta (cond
+                ((and next
+                      (or (null prompt)
+                          (equal (map-elt next :text) prompt)))
+                 (agent-shell-lark--state-put state :next-lark-prompt nil)
+                 next)
+                (next
+                 (agent-shell-lark--log
+                  "Discarding stale Lark prompt metadata for message: %s"
+                  (or (map-elt next :message-id) "<none>"))
+                 (agent-shell-lark--state-put state :next-lark-prompt nil)
+                 (agent-shell-lark--take-pending-prompt state prompt))
+                (t
+                 (agent-shell-lark--take-pending-prompt state prompt)))))
+    (unless (and auto-retry
+                 (not meta)
+                 (map-elt state :current-lark-message-id))
+      (agent-shell-lark--state-put state :current-lark-message-id
+                                   (map-elt meta :message-id)))))
+
+(defun agent-shell-lark--current-reply-message-id (state)
+  "Return the Lark message ID to reply to for STATE's active turn."
+  (and agent-shell-lark-reply-to-user-messages
+       (map-elt state :current-lark-message-id)))
 
 ;;; Lifecycle
 
@@ -358,7 +508,10 @@ consumer is running."
                         (cons :subscriptions nil)
                         (cons :pending nil)
                         (cons :tool-call-status nil)
-                        (cons :progress-text "")))
+                        (cons :progress-text "")
+                        (cons :pending-lark-prompts nil)
+                        (cons :next-lark-prompt nil)
+                        (cons :current-lark-message-id nil)))
       (setq agent-shell-lark--state state)
       (agent-shell-lark--subscribe shell-buffer state)
       (agent-shell-lark--register-responder)
@@ -375,12 +528,17 @@ consumer is running."
                                (buffer-name shell-buffer) chat-id)
       (message "Lark bridge bound to chat %s" chat-id))
      (t
+      (agent-shell-lark--ensure-state-keys state)
       ;; No explicit chat: (re-)enter claim mode.  Detach any current chat
       ;; so the next inbound message rebinds this session.
       (when-let* ((current (map-elt state :chat-id)))
-        (map-put! state :chat-id nil)
-        (map-put! state :pending nil)
-        (map-put! state :tool-call-status nil)
+        (agent-shell-lark--state-put state :chat-id nil)
+        (agent-shell-lark--state-put state :pending nil)
+        (agent-shell-lark--state-put state :tool-call-status nil)
+        (agent-shell-lark--state-put state :progress-text "")
+        (agent-shell-lark--state-put state :pending-lark-prompts nil)
+        (agent-shell-lark--state-put state :next-lark-prompt nil)
+        (agent-shell-lark--state-put state :current-lark-message-id nil)
         (agent-shell-lark--log "Detached chat %s from %s for re-claim"
                                  current (buffer-name shell-buffer)))
       (when (and (buffer-live-p agent-shell-lark--awaiting-claim)
@@ -423,15 +581,25 @@ CHAT-ID is set on STATE.  Both sides' pending approval and tool-call
 dedupe tracking are reset so the move starts from a clean slate."
   (when-let* ((previous (agent-shell-lark--bridge-for-chat chat-id)))
     (unless (eq previous state)
-      (map-put! previous :chat-id nil)
-      (map-put! previous :pending nil)
-      (map-put! previous :tool-call-status nil)
+      (agent-shell-lark--ensure-state-keys previous)
+      (agent-shell-lark--state-put previous :chat-id nil)
+      (agent-shell-lark--state-put previous :pending nil)
+      (agent-shell-lark--state-put previous :tool-call-status nil)
+      (agent-shell-lark--state-put previous :progress-text "")
+      (agent-shell-lark--state-put previous :pending-lark-prompts nil)
+      (agent-shell-lark--state-put previous :next-lark-prompt nil)
+      (agent-shell-lark--state-put previous :current-lark-message-id nil)
       (agent-shell-lark--log "Detached chat %s from %s"
                                chat-id
                                (buffer-name (map-elt previous :buffer)))))
-  (map-put! state :chat-id chat-id)
-  (map-put! state :pending nil)
-  (map-put! state :tool-call-status nil))
+  (agent-shell-lark--ensure-state-keys state)
+  (agent-shell-lark--state-put state :chat-id chat-id)
+  (agent-shell-lark--state-put state :pending nil)
+  (agent-shell-lark--state-put state :tool-call-status nil)
+  (agent-shell-lark--state-put state :progress-text "")
+  (agent-shell-lark--state-put state :pending-lark-prompts nil)
+  (agent-shell-lark--state-put state :next-lark-prompt nil)
+  (agent-shell-lark--state-put state :current-lark-message-id nil))
 
 ;;;###autoload
 (defun agent-shell-lark-rebind (chat-id)
@@ -601,7 +769,8 @@ are top-level keys."
   (when-let* ((event (agent-shell-lark--parse-json line))
               ((equal (map-elt event 'type) "im.message.receive_v1"))
               (sender (map-elt event 'sender_id)))
-    (let ((chat-id (map-elt event 'chat_id)))
+    (let ((chat-id (map-elt event 'chat_id))
+          (message-id (agent-shell-lark--event-message-id event)))
       (cond
        ((not (member sender agent-shell-lark-allowed-open-ids))
         (agent-shell-lark--log
@@ -609,15 +778,20 @@ are top-level keys."
          sender))
        ((null chat-id)
         (agent-shell-lark--log "Incoming message without chat_id; ignoring"))
+       ((agent-shell-lark--seen-message-p message-id)
+        (agent-shell-lark--log "Ignored duplicate Lark message: %s" message-id))
        (t
+        (agent-shell-lark--remember-message-id message-id)
         (let ((state (agent-shell-lark--bridge-for-chat chat-id)))
           (cond
            (state
+            (agent-shell-lark--ensure-state-keys state)
             (agent-shell-lark--dispatch-message state event))
            ((buffer-live-p agent-shell-lark--awaiting-claim)
             (setq state (buffer-local-value 'agent-shell-lark--state
                                             agent-shell-lark--awaiting-claim))
-            (map-put! state :chat-id chat-id)
+            (agent-shell-lark--ensure-state-keys state)
+            (agent-shell-lark--state-put state :chat-id chat-id)
             (setq agent-shell-lark--awaiting-claim nil)
             (agent-shell-lark--log "Bound chat %s to %s"
                                      chat-id
@@ -650,33 +824,41 @@ pending approval, or otherwise injected as a prompt."
      ((not (member message-type '("text" "post")))
       (agent-shell-lark--send
        state (format "\u26A0 Only text/post messages are supported (got %s)."
-                     message-type)))
+                     message-type)
+       (agent-shell-lark--event-message-id event)))
      ((null text)
       (agent-shell-lark--log "Empty text content on incoming message"))
      ((agent-shell-lark--interrupt-command-p text)
-      (agent-shell-lark--interrupt state))
+      (agent-shell-lark--interrupt state event))
      ((map-elt state :pending)
-      (agent-shell-lark--answer-pending state text))
+      (agent-shell-lark--answer-pending state text event))
      (t
-      (agent-shell-lark--inject-prompt state text)))))
+      (agent-shell-lark--inject-prompt state text event)))))
 
 (defun agent-shell-lark--interrupt-command-p (text)
   "Return non-nil if TEXT is configured as an interrupt command."
   (member (downcase (string-trim text))
           agent-shell-lark-interrupt-commands))
 
-(defun agent-shell-lark--interrupt (state)
-  "Interrupt STATE's bound `agent-shell' buffer from Lark."
+(defun agent-shell-lark--interrupt (state &optional event)
+  "Interrupt STATE's bound `agent-shell' buffer from Lark.
+
+When EVENT has a Lark message ID, reply to that message."
   (let ((shell-buffer (map-elt state :buffer)))
     (condition-case err
         (if (not (buffer-live-p shell-buffer))
-            (agent-shell-lark--send state "⚠ Session buffer is gone; cannot interrupt.")
+            (agent-shell-lark--send
+             state "⚠ Session buffer is gone; cannot interrupt."
+             (agent-shell-lark--event-message-id event))
           (with-current-buffer shell-buffer
             (agent-shell-interrupt t))
-          (agent-shell-lark--send state "⏹ Sent C-c C-c interrupt."))
+          (agent-shell-lark--send
+           state "⏹ Sent C-c C-c interrupt."
+           (agent-shell-lark--event-message-id event)))
       (error
        (agent-shell-lark--send
-        state (format "⚠ Could not interrupt: %s" (error-message-string err)))))))
+        state (format "⚠ Could not interrupt: %s" (error-message-string err))
+        (agent-shell-lark--event-message-id event))))))
 
 (defun agent-shell-lark--message-text (event)
   "Return the trimmed user text of EVENT, or nil.
@@ -713,7 +895,7 @@ segments are skipped."
         (push (string-join (nreverse parts) "") lines)))
     (string-join (nreverse lines) "\n")))
 
-(defun agent-shell-lark--inject-prompt (state text)
+(defun agent-shell-lark--inject-prompt (state text &optional event)
   "Queue or submit TEXT as a prompt into STATE's shell buffer.
 
 Uses `agent-shell-prompt-queue', which submits immediately when the
@@ -722,16 +904,47 @@ completes."
   (let ((shell-buffer (map-elt state :buffer)))
     (condition-case err
         (with-current-buffer shell-buffer
-          (let ((was-busy (shell-maker-busy)))
-            (agent-shell-prompt-queue text)
+          (agent-shell-lark--ensure-state-keys state)
+          (let* ((was-busy (shell-maker-busy))
+                 (message-id (agent-shell-lark--event-message-id event))
+                 (meta (and event
+                            (agent-shell-lark--prompt-meta event text))))
+            (if was-busy
+                (progn
+                  (agent-shell-prompt-queue text)
+                  (when meta
+                    (agent-shell-lark--state-put
+                     state :pending-lark-prompts
+                     (append (map-elt state :pending-lark-prompts)
+                             (list meta))))
+                  (when agent-shell-lark-ack-queued-prompts
+                    (agent-shell-lark--send
+                     state
+                     (format (concat "⏳ Session is busy; your prompt has been queued as #%d.
+"
+                                     "The next agent reply may still belong to an earlier prompt.
+
+"
+                                     "Queued: %s")
+                             (length (map-elt state :pending-lark-prompts))
+                             (agent-shell-lark--one-line-preview text))
+                     message-id)))
+              (agent-shell-lark--state-put state :next-lark-prompt meta)
+              (agent-shell-prompt-queue text))
             (agent-shell-lark--log "%s prompt into %s: %s"
-                                     (if was-busy "Queued" "Injected")
-                                     (buffer-name shell-buffer)
-                                     (agent-shell-lark--truncate text))))
+                                   (if was-busy "Queued" "Injected")
+                                   (buffer-name shell-buffer)
+                                   (agent-shell-lark--truncate text))
+            (when message-id
+              (agent-shell-lark--log "Lark message %s -> %s prompt"
+                                     message-id
+                                     (if was-busy "queued" "active")))))
       (error
+       (agent-shell-lark--state-put state :next-lark-prompt nil)
        (agent-shell-lark--send
-        state (format "\u26A0 Could not submit prompt: %s"
-                      (error-message-string err)))))))
+        state (format "⚠ Could not submit prompt: %s"
+                      (error-message-string err))
+        (agent-shell-lark--event-message-id event))))))
 
 ;;; Outbound (agent-shell -> Lark)
 
@@ -753,6 +966,12 @@ completes."
              (agent-shell-lark--on-agent-message-chunk state event)))
           (agent-shell-subscribe-to
            :shell-buffer shell-buffer
+           :event 'input-submitted
+           :on-event
+           (lambda (event)
+             (agent-shell-lark--on-input-submitted state event)))
+          (agent-shell-subscribe-to
+           :shell-buffer shell-buffer
            :event 'tool-call-update
            :on-event
            (lambda (event)
@@ -762,7 +981,7 @@ completes."
            :event 'permission-response
            :on-event
            (lambda (_event)
-             (map-put! state :pending nil)))
+             (agent-shell-lark--state-put state :pending nil)))
           (agent-shell-subscribe-to
            :shell-buffer shell-buffer
            :event 'error
@@ -771,13 +990,20 @@ completes."
              (agent-shell-lark--on-error state event)))
           (agent-shell-subscribe-to
            :shell-buffer shell-buffer
+           :event 'retry-exhausted
+           :on-event
+           (lambda (event)
+             (agent-shell-lark--on-retry-exhausted state event)))
+          (agent-shell-subscribe-to
+           :shell-buffer shell-buffer
            :event 'clean-up
            :on-event
            (lambda (_event)
-             (with-current-buffer shell-buffer
-               (when agent-shell-lark--state
-                 (agent-shell-lark-stop))))))))
-    (map-put! state :subscriptions tokens)))
+                 (with-current-buffer shell-buffer
+                   (when agent-shell-lark--state
+                     (agent-shell-lark-stop))))))))
+    (agent-shell-lark--state-put state :subscriptions tokens)))
+
 
 (defun agent-shell-lark--on-turn-complete (state event)
   "Relay thoughts and the final agent message for STATE's session.
@@ -789,18 +1015,22 @@ EVENT is the `turn-complete' event alist."
                            (map-elt state :buffer)))))
       (agent-shell-lark--send
        state (concat agent-shell-thought-process-icon " " summary))))
-  (map-put! state :progress-text "")
   (let ((mention (and agent-shell-lark-mention-on-turn-complete
-                      (agent-shell-lark--mention-string))))
-    (if agent-shell-lark-relay-turn-complete
-        (let ((text (or (agent-shell-lark--last-agent-message (map-elt state :buffer))
-                        (format "(turn complete: %s)"
-                                (map-nested-elt event '(:data :stop-reason))))))
-          (agent-shell-lark--send
-           state (concat "\U0001F916 " text
-                         (if mention (concat "\n\n" mention " ✅") ""))))
-      (when mention
-        (agent-shell-lark--send-mention state)))))
+                      (agent-shell-lark--mention-string)))
+        (reply-to (agent-shell-lark--current-reply-message-id state)))
+    (unwind-protect
+        (if agent-shell-lark-relay-turn-complete
+            (let ((text (or (agent-shell-lark--current-message-text state)
+                            (format "(turn complete: %s)"
+                                    (map-nested-elt event '(:data :stop-reason))))))
+              (agent-shell-lark--send
+               state (concat "\U0001F916 " text
+                             (if mention (concat "\n\n" mention " ✅") ""))
+               reply-to))
+          (when mention
+            (agent-shell-lark--send-mention state reply-to)))
+      (agent-shell-lark--state-put state :progress-text "")
+      (agent-shell-lark--state-put state :current-lark-message-id nil))))
 
 (defun agent-shell-lark--last-thoughts (shell-buffer)
   "Return SHELL-BUFFER's last thoughts section from its transcript, or nil.
@@ -824,15 +1054,22 @@ transcript's final \"## Agent's Thoughts\" section at end of turn."
                (point-max)))))))))
 
 (defun agent-shell-lark--on-agent-message-chunk (state event)
-  "Accumulate EVENT's text chunk on STATE for progress relay.
+  "Accumulate EVENT's text chunk on STATE for Lark relay.
 
 The accumulated segment is relayed by
 `agent-shell-lark--on-tool-call-update' when the next tool call
-closes it."
-  (when agent-shell-lark-relay-progress-messages
-    (when-let* ((chunk (map-nested-elt event '(:data :text-chunk))))
-      (map-put! state :progress-text
-                (concat (map-elt state :progress-text) chunk)))))
+closes it, or by `agent-shell-lark--on-turn-complete' when it is the
+turn's final assistant message."
+  (when-let* ((chunk (map-nested-elt event '(:data :text-chunk))))
+    (agent-shell-lark--state-put
+     state :progress-text
+     (concat (map-elt state :progress-text) chunk))))
+
+(defun agent-shell-lark--current-message-text (state)
+  "Return STATE's current accumulated assistant message, or nil."
+  (when-let* ((text (string-trim (or (map-elt state :progress-text) "")))
+              ((not (string-empty-p text))))
+    (agent-shell-lark--truncate text)))
 
 (defun agent-shell-lark--thought-last-paragraph (text)
   "Return the last non-empty paragraph from thinking TEXT."
@@ -854,11 +1091,11 @@ status transitions are relayed, tracked per tool-call id on STATE."
   ;; A tool call closes any assistant text preceding it; relay that
   ;; segment as a progress message.
   (when agent-shell-lark-relay-progress-messages
-    (when-let* ((text (string-trim (or (map-elt state :progress-text) "")))
-                ((not (string-empty-p text))))
+    (when-let* ((text (agent-shell-lark--current-message-text state)))
       (agent-shell-lark--send
-       state (concat "💬 " (agent-shell-lark--truncate text)))))
-  (map-put! state :progress-text "")
+       state (concat "💬 " text)
+       (agent-shell-lark--current-reply-message-id state))))
+  (agent-shell-lark--state-put state :progress-text "")
   (when agent-shell-lark-relay-tool-calls
     (agent-shell-lark--relay-tool-status state event)))
 
@@ -871,14 +1108,16 @@ status transitions are relayed, tracked per tool-call id on STATE."
          (title (or (map-elt tool-call :title) "tool call"))
          (seen (map-elt state :tool-call-status)))
     (when (and id (not (equal (map-elt seen id) status)))
-      (map-put! state :tool-call-status
-                (cons (cons id status)
-                      (assoc-delete-all id (copy-sequence seen))))
+      (agent-shell-lark--state-put
+       state :tool-call-status
+       (cons (cons id status)
+             (assoc-delete-all id (copy-sequence seen))))
       (agent-shell-lark--send
        state (format "%s %s%s"
                      (agent-shell-lark--tool-status-icon status)
                      title
-                     (if status (format " [%s]" status) ""))))))
+                     (if status (format " [%s]" status) ""))
+       (agent-shell-lark--current-reply-message-id state)))))
 
 (defun agent-shell-lark--tool-status-icon (status)
   "Return an icon string for tool-call STATUS."
@@ -891,8 +1130,28 @@ status transitions are relayed, tracked per tool-call id on STATE."
 (defun agent-shell-lark--on-error (state event)
   "Relay an ACP EVENT error to STATE's chat."
   (let ((message (map-nested-elt event '(:data :message))))
-    (agent-shell-lark--send
-     state (format "\u26A0 Error: %s" (or message "unknown")))))
+    (unwind-protect
+        (agent-shell-lark--send
+         state (format "⚠ Error: %s" (or message "unknown"))
+         (agent-shell-lark--current-reply-message-id state))
+      (agent-shell-lark--state-put state :current-lark-message-id nil))))
+
+(defun agent-shell-lark--on-retry-exhausted (state event)
+  "Tell STATE's chat that automatic retries in EVENT are exhausted."
+  (let* ((data (map-elt event :data))
+         (attempts (or (map-elt data :attempts) 0))
+         (line (or (map-elt data :line) "retriable error"))
+         (mention (and agent-shell-lark-mention-on-turn-complete
+                       (agent-shell-lark--mention-string))))
+    (unwind-protect
+        (agent-shell-lark--send
+         state
+         (concat (format "⚠ Auto-retry exhausted after %d attempts.\n%s\n"
+                         attempts line)
+                 "The session is idle and waiting for a new prompt."
+                 (if mention (concat "\n\n" mention) ""))
+         (agent-shell-lark--current-reply-message-id state))
+      (agent-shell-lark--state-put state :current-lark-message-id nil))))
 
 (defun agent-shell-lark--last-agent-message (shell-buffer)
   "Return SHELL-BUFFER's last agent message from its transcript, or nil."
@@ -921,10 +1180,14 @@ status transitions are relayed, tracked per tool-call id on STATE."
   "Return a short human label identifying SHELL-BUFFER's session."
   (buffer-name shell-buffer))
 
-;;; Formula rendering ($$...$$ -> embedded image)
+;;; Formula rendering (display math -> embedded image)
 
-(defconst agent-shell-lark--formula-regexp "\\$\\$\\([^$]+\\)\\$\\$"
-  "Matches a display formula; group 1 is the TeX source.")
+(defconst agent-shell-lark--formula-regexp
+  "\\$\\$\\([^$]+\\)\\$\\$\\|\\\\\\[\\(\\(?:.\\|\n\\)*?\\)\\\\\\]"
+  "Match display math delimited by $$...$$ or \\[...\\].
+
+The TeX source is capture group 1 for dollar delimiters and capture
+group 2 for bracket delimiters.")
 
 (defvar agent-shell-lark--formula-keys nil
   "Alist of (FORMULA-SHA1 . IMAGE-KEY) for uploaded formula images.")
@@ -950,7 +1213,10 @@ status transitions are relayed, tracked per tool-call id on STATE."
   "Return the unique TeX sources of display formulas in TEXT."
   (let ((start 0) (formulas ()))
     (while (string-match agent-shell-lark--formula-regexp text start)
-      (push (match-string 1 text) formulas)
+      ;; Read the captures directly so `match-end' below still refers to
+      ;; this iteration's match.  Re-running `string-match' here would
+      ;; reset the match data and can make a multi-formula scan loop.
+      (push (or (match-string 1 text) (match-string 2 text)) formulas)
       (setq start (match-end 0)))
     (seq-uniq (nreverse formulas))))
 
@@ -959,8 +1225,9 @@ status transitions are relayed, tracked per tool-call id on STATE."
   (replace-regexp-in-string
    agent-shell-lark--formula-regexp
    (lambda (match)
-     (let* ((formula (progn (string-match agent-shell-lark--formula-regexp match)
-                            (match-string 1 match)))
+     (let* ((formula (progn
+                       (string-match agent-shell-lark--formula-regexp match)
+                       (or (match-string 1 match) (match-string 2 match))))
             (key (cdr (assoc (sha1 formula) agent-shell-lark--formula-keys))))
        (if key (format "![formula](%s)" key) match)))
    text t t))
@@ -1034,8 +1301,10 @@ original text rather than blocking."
                                  (funcall callback t))
                              (funcall fail "upload" process)))))))))))))))))
 
-(defun agent-shell-lark--send-with-formulas (state text)
-  "Send TEXT to STATE's chat with its display formulas embedded as images."
+(defun agent-shell-lark--send-with-formulas (state text &optional reply-to)
+  "Send TEXT to STATE's chat with its display formulas embedded as images.
+
+When REPLY-TO is non-nil, send it as a Lark reply to that message."
   (let* ((formulas (agent-shell-lark--formulas-in text))
          (missing (seq-remove (lambda (formula)
                                 (assoc (sha1 formula) agent-shell-lark--formula-keys))
@@ -1045,7 +1314,8 @@ original text rather than blocking."
          (finish (lambda ()
                    (agent-shell-lark--send-plain
                     state
-                    (if failed text (agent-shell-lark--replace-formulas text))))))
+                    (if failed text (agent-shell-lark--replace-formulas text))
+                    reply-to))))
     (if (zerop pending)
         (funcall finish)
       (dolist (formula missing)
@@ -1063,38 +1333,49 @@ original text rather than blocking."
     (mapconcat (lambda (id) (format "<at user_id=\"%s\"></at>" id))
                agent-shell-lark-allowed-open-ids " ")))
 
-(defun agent-shell-lark--send-mention (state)
-  "At-mention all allowed users in STATE's chat with a short text ping."
+(defun agent-shell-lark--send-mention (state &optional reply-to)
+  "At-mention all allowed users in STATE's chat with a short text ping.
+
+When REPLY-TO is non-nil, send it as a Lark reply to that message."
   (when-let* ((chat-id (map-elt state :chat-id))
               (mention (agent-shell-lark--mention-string)))
+    (when reply-to
+      (agent-shell-lark--log "Replying to Lark message %s" reply-to))
     (make-process
      :name "agent-shell-lark-send"
      :buffer (get-buffer-create " *agent-shell-lark-send*")
      :connection-type 'pipe
-     :command (list "timeout"
-                    (number-to-string agent-shell-lark-command-timeout)
-                    agent-shell-lark-cli-command
-                    "im" "+messages-send"
-                    "--as" "bot"
-                    "--chat-id" chat-id
-                    "--text"
-                    (concat mention " ✅ turn complete")))))
+     :command (append
+               (list "timeout"
+                     (number-to-string agent-shell-lark-command-timeout)
+                     agent-shell-lark-cli-command
+                     "im" (if reply-to "+messages-reply" "+messages-send")
+                     "--as" "bot"
+                     (if reply-to "--message-id" "--chat-id")
+                     (or reply-to chat-id))
+               (when (and reply-to agent-shell-lark-reply-in-thread)
+                 (list "--reply-in-thread"))
+               (list "--text"
+                     (concat mention " ✅ turn complete"))))))
 
-(defun agent-shell-lark--send (state text)
+(defun agent-shell-lark--send (state text &optional reply-to)
   "Send TEXT to the Lark chat bound to STATE.
 
 When `agent-shell-lark-render-formulas' is enabled and TEXT contains
-display formulas, they are rendered and embedded as images first."
+display formulas, they are rendered and embedded as images first.
+
+When REPLY-TO is non-nil, send it as a Lark reply to that message."
   (if (and agent-shell-lark-render-formulas
            (string-match-p agent-shell-lark--formula-regexp text)
            (agent-shell-lark--formula-tools-ready-p))
-      (agent-shell-lark--send-with-formulas state text)
-    (agent-shell-lark--send-plain state text)))
+      (agent-shell-lark--send-with-formulas state text reply-to)
+    (agent-shell-lark--send-plain state text reply-to)))
 
-(defun agent-shell-lark--send-plain (state text)
+(defun agent-shell-lark--send-plain (state text &optional reply-to)
   "Send TEXT to the Lark chat bound to STATE as-is.
 
 Runs `lark-cli im +messages-send' asynchronously as the bot identity.
+When REPLY-TO is non-nil, use `lark-cli im +messages-reply' instead.
 Does nothing when the session has no bound chat yet."
   (when-let* ((chat-id (map-elt state :chat-id)))
     (let ((labeled (if agent-shell-lark-label-outbound
@@ -1103,20 +1384,26 @@ Does nothing when the session has no bound chat yet."
                                 (map-elt state :buffer))
                                text)
                      text)))
+      (when reply-to
+        (agent-shell-lark--log "Replying to Lark message %s" reply-to))
       (make-process
        :name "agent-shell-lark-send"
        :buffer (get-buffer-create " *agent-shell-lark-send*")
        :connection-type 'pipe
-       :command (list "timeout"
-                      (number-to-string agent-shell-lark-command-timeout)
-                      agent-shell-lark-cli-command
-                      "im" "+messages-send"
-                      "--as" "bot"
-                      "--chat-id" chat-id
-                      (if (eq agent-shell-lark-message-type 'post)
-                          "--markdown"
-                        "--text")
-                      labeled)
+       :command (append
+                 (list "timeout"
+                       (number-to-string agent-shell-lark-command-timeout)
+                       agent-shell-lark-cli-command
+                       "im" (if reply-to "+messages-reply" "+messages-send")
+                       "--as" "bot"
+                       (if reply-to "--message-id" "--chat-id")
+                       (or reply-to chat-id))
+                 (when (and reply-to agent-shell-lark-reply-in-thread)
+                   (list "--reply-in-thread"))
+                 (list (if (eq agent-shell-lark-message-type 'post)
+                           "--markdown"
+                         "--text")
+                       labeled))
        :sentinel
        (lambda (process _change)
          (when (memq (process-status process) '(exit signal))
@@ -1125,7 +1412,11 @@ Does nothing when the session has no bound chat yet."
               "Send failed (exit %d): %s"
               (process-exit-status process)
               (with-current-buffer (process-buffer process)
-                (string-trim (buffer-string)))))))))))
+                (string-trim (buffer-string))))
+             (when reply-to
+               (agent-shell-lark--log
+                "Reply to %s failed; falling back to chat send" reply-to)
+               (agent-shell-lark--send-plain state text nil)))))))))
 
 ;;; Reply-based permission approvals
 
@@ -1170,16 +1461,18 @@ Returns nil so the interactive permission dialog is also shown locally."
               (state (agent-shell-lark--bridge-for-tool-call tool-call))
               ((map-elt state :chat-id))
               (options (map-elt permission :options)))
-    (let ((title (map-elt tool-call :title)))
+    (let ((title (map-elt tool-call :title))
+          (reply-to (agent-shell-lark--current-reply-message-id state)))
       (if agent-shell-lark-permission-cards
           (agent-shell-lark--send-permission-card
-           state title options (map-elt permission :respond))
-        (map-put! state :pending
-                  (list (cons :respond (map-elt permission :respond))
-                        (cons :options options)
-                        (cons :title title)))
+           state title options (map-elt permission :respond) reply-to)
+        (agent-shell-lark--state-put
+         state :pending
+         (list (cons :respond (map-elt permission :respond))
+               (cons :options options)
+               (cons :title title)))
         (agent-shell-lark--send
-         state (agent-shell-lark--approval-text title options)))
+         state (agent-shell-lark--approval-text title options) reply-to))
       (agent-shell-lark--log "Permission relayed to %s: %s"
                                (buffer-name (map-elt state :buffer)) title)
       nil)))
@@ -1221,8 +1514,10 @@ Returns nil so the interactive permission dialog is also shown locally."
                                    (option_id . ,(map-elt option :option-id)))))))))
               options)))))))
 
-(defun agent-shell-lark--send-permission-card (state title options respond)
-  "Send a permission card for TITLE/OPTIONS in STATE; wire RESPOND to it."
+(defun agent-shell-lark--send-permission-card (state title options respond &optional reply-to)
+  "Send a permission card for TITLE/OPTIONS in STATE; wire RESPOND to it.
+
+When REPLY-TO is non-nil, send it as a Lark reply to that message."
   (let ((pid (format "p%d" (setq agent-shell-lark--permission-counter
                                  (1+ agent-shell-lark--permission-counter)))))
     (push (cons pid (list (cons :respond respond)
@@ -1234,16 +1529,20 @@ Returns nil so the interactive permission dialog is also shown locally."
      :name "agent-shell-lark-card-send"
      :buffer (get-buffer-create " *agent-shell-lark-send*")
      :connection-type 'pipe
-     :command (list "timeout"
-                    (number-to-string agent-shell-lark-command-timeout)
-                    agent-shell-lark-cli-command
-                    "im" "+messages-send"
-                    "--as" "bot"
-                    "--chat-id" (map-elt state :chat-id)
-                    "--msg-type" "interactive"
-                    "--content" (json-encode
-                                 (agent-shell-lark--permission-card
-                                  pid title options state)))
+     :command (append
+               (list "timeout"
+                     (number-to-string agent-shell-lark-command-timeout)
+                     agent-shell-lark-cli-command
+                     "im" (if reply-to "+messages-reply" "+messages-send")
+                     "--as" "bot"
+                     (if reply-to "--message-id" "--chat-id")
+                     (or reply-to (map-elt state :chat-id)))
+               (when (and reply-to agent-shell-lark-reply-in-thread)
+                 (list "--reply-in-thread"))
+               (list "--msg-type" "interactive"
+                     "--content" (json-encode
+                                  (agent-shell-lark--permission-card
+                                   pid title options state))))
      :sentinel
      (lambda (process _change)
        (when (memq (process-status process) '(exit signal))
@@ -1252,7 +1551,12 @@ Returns nil so the interactive permission dialog is also shown locally."
             "Card send failed (exit %d): %s"
             (process-exit-status process)
             (with-current-buffer (process-buffer process)
-              (string-trim (buffer-string))))))))))
+              (string-trim (buffer-string))))
+           (when reply-to
+             (agent-shell-lark--log
+              "Card reply to %s failed; falling back to chat send" reply-to)
+             (agent-shell-lark--send-permission-card
+              state title options respond nil))))))))
 
 (defun agent-shell-lark--answered-card (title label allow-p)
   "Build the retired card for TITLE answered with LABEL; ALLOW-P colors it."
@@ -1352,9 +1656,12 @@ Returns nil so the interactive permission dialog is also shown locally."
       options ""))
    "\n\n(shortcuts: y/allow, n/reject)"))
 
-(defun agent-shell-lark--answer-pending (state text)
-  "Interpret TEXT as the answer to STATE's pending approval."
+(defun agent-shell-lark--answer-pending (state text &optional event)
+  "Interpret TEXT as the answer to STATE's pending approval.
+
+When EVENT has a Lark message ID, reply to that message."
   (let* ((pending (map-elt state :pending))
+         (reply-to (agent-shell-lark--event-message-id event))
          (options (map-elt pending :options))
          (respond (map-elt pending :respond))
          (choice (agent-shell-lark--match-option text options)))
@@ -1362,11 +1669,12 @@ Returns nil so the interactive permission dialog is also shown locally."
         (agent-shell-lark--send
          state (concat "\u26A0 Unrecognized answer. "
                        (agent-shell-lark--approval-text
-                        (map-elt pending :title) options)))
-      (map-put! state :pending nil)
+                        (map-elt pending :title) options))
+         reply-to)
+      (agent-shell-lark--state-put state :pending nil)
       (funcall respond (map-elt choice :option-id))
       (agent-shell-lark--send
-       state (format "\u2705 %s" (map-elt choice :label)))
+       state (format "\u2705 %s" (map-elt choice :label)) reply-to)
       (agent-shell-lark--log "Permission answered in %s: %s"
                                (buffer-name (map-elt state :buffer))
                                (map-elt choice :label)))))
