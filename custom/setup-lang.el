@@ -390,9 +390,24 @@
 
 ;;; Markdown --------------------------------------------------------------------
 
-(use-package markdown-mode
-  :custom
-  (markdown-command "/usr/bin/pandoc"))
+(use-package markdown-ts-mode
+  :ensure nil ; Built into Emacs 31.
+  :demand t
+  :config
+  ;; Loading the mode registers the matching grammar sources.
+  (dolist (lang '(markdown markdown-inline))
+    (unless (treesit-language-available-p lang)
+      (treesit-install-language-grammar lang)))
+  (add-to-list 'major-mode-remap-alist
+               '(markdown-mode . markdown-ts-mode))
+  (add-to-list 'major-mode-remap-alist
+               '(gfm-mode . markdown-ts-mode)))
+
+(use-package markdown-ts-appear
+  :vc (markdown-ts-appear
+       :url "https://github.com/Thysrael/markdown-ts-appear"
+       :rev :newest)
+  :hook (markdown-ts-mode . markdown-ts-appear-mode))
 
 ;;; LaTeX (not used now) ----------------------------------------------------------
 ;; (setq TeX-auto-save t)

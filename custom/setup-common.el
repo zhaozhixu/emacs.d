@@ -41,6 +41,13 @@ startup output cannot be mistaken for part of PATH."
 ;; does not.  The helper remains available for platforms that need it.
 ;; (set-exec-path-from-shell-PATH)
 
+;; Go installs tools such as gopls into ~/go/bin.
+(let ((go-bin (expand-file-name "~/go/bin")))
+  (add-to-list 'exec-path go-bin)
+  (unless (member (file-name-as-directory go-bin)
+                  (parse-colon-path (getenv "PATH")))
+    (setenv "PATH" (concat go-bin path-separator (getenv "PATH")))))
+
 (define-key key-translation-map (kbd "<menu>") #'event-apply-super-modifier) ; super key
 (global-set-key (kbd "C-x C-b") 'ibuffer)
 (windmove-default-keybindings)

@@ -114,8 +114,8 @@
  ;; Your init file should contain only one such instance.
  ;; If there is more than one, they won't work right.
  '(package-vc-selected-packages
-   '((claude-code-ide :url
-                      "https://github.com/manzaltu/claude-code-ide.el"))))
+   '((markdown-ts-appear :url
+                         "https://github.com/Thysrael/markdown-ts-appear"))))
 (custom-set-faces
  ;; custom-set-faces was added by Custom.
  ;; If you edit it by hand, you could mess it up, so be careful.
