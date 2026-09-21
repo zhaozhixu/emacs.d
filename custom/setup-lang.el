@@ -172,24 +172,30 @@
 
 (defun my/c-ts-indent-style ()
   "Return per-buffer treesit indent rules (see the port table above)."
-  (cond
-   ((my/kernel-tree-file-p)
-    (alist-get 'linux (c-ts-mode--indent-styles
-                       (if (derived-mode-p 'c++-ts-mode) 'cpp 'c))))
-   ((derived-mode-p 'c++-ts-mode)
-    ;; The regexp must be anchored: unanchored "declaration_list" also
-    ;; matches field_declaration_list (class bodies).
-    `(((node-is "access_specifier") parent-bol my/c-ts-half-offset)
-      ((parent-is "\\`declaration_list\\'") parent-bol 0) ; namespace body
-      ,@(alist-get 'k&r (c-ts-mode--indent-styles 'cpp))))
-   (t
-    (alist-get 'k&r (c-ts-mode--indent-styles 'c)))))
+  (let* ((language (if (derived-mode-p 'c++-ts-mode) 'cpp 'c))
+         (style (if (my/kernel-tree-file-p) 'linux 'k&r))
+         (new-api (fboundp 'c-ts-mode--simple-indent-rules))
+         (rules (if new-api
+                    (alist-get language
+                               (c-ts-mode--simple-indent-rules language style))
+                  (alist-get style (c-ts-mode--indent-styles language)))))
+    (when (and (eq language 'cpp) (eq style 'k&r))
+      ;; The regexp must be anchored: unanchored "declaration_list" also
+      ;; matches field_declaration_list (class bodies).
+      (setq rules
+            `(((node-is "access_specifier") parent-bol my/c-ts-half-offset)
+              ((parent-is "\\`declaration_list\\'") parent-bol 0) ; namespace body
+              ,@rules)))
+    ;; Emacs 31 consumes language-keyed rules directly; Emacs 30 adds
+    ;; the language key around the callback's result itself.
+    (if new-api (list (cons language rules)) rules)))
 
 (setq c-ts-mode-indent-style #'my/c-ts-indent-style)
 
 (defun my/c-ts-setup ()
   "C/C++ treesit setup: lsp plus per-tree offsets and tabs."
   (my/c-lsp-setup)
+  ;; The Emacs 30 offset name remains an alias in Emacs 31.
   (cond ((my/kernel-tree-file-p)
          (setq-local c-ts-mode-indent-offset 8)
          (setq-local tab-width 8) ; kernel code is one 8-wide tab per level
@@ -403,11 +409,7 @@
   (add-to-list 'major-mode-remap-alist
                '(gfm-mode . markdown-ts-mode)))
 
-(use-package markdown-ts-appear
-  :vc (markdown-ts-appear
-       :url "https://github.com/Thysrael/markdown-ts-appear"
-       :rev :newest)
-  :hook (markdown-ts-mode . markdown-ts-appear-mode))
+(require 'markdown-agent-shell-preview)
 
 ;;; LaTeX (not used now) ----------------------------------------------------------
 ;; (setq TeX-auto-save t)
