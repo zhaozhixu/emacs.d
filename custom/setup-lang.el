@@ -109,6 +109,7 @@
         (tsx "https://github.com/tree-sitter/tree-sitter-typescript" "master" "tsx/src")
         (javascript "https://github.com/tree-sitter/tree-sitter-javascript")
         (go "https://github.com/tree-sitter/tree-sitter-go")
+        (gdscript "https://github.com/PrestonKnopp/tree-sitter-gdscript")
         (rust "https://github.com/tree-sitter/tree-sitter-rust")))
 
 ;; Install missing grammars at startup (one-time per machine; needs
@@ -124,6 +125,7 @@
                  (js-mode . js-ts-mode)
                  (js2-mode . js-ts-mode)
                  (go-mode . go-ts-mode)
+                 (gdscript-mode . gdscript-ts-mode)
                  (rust-mode . rust-ts-mode)))
   (add-to-list 'major-mode-remap-alist remap))
 (add-to-list 'auto-mode-alist '("\\.ts\\'" . typescript-ts-mode))
@@ -262,6 +264,29 @@
 (use-package go-mode
   :mode "\\.go\\'")
 (add-hook 'go-ts-mode-hook #'my/go-setup)
+
+;;; Godot / GDScript ------------------------------------------------------------
+
+(defun my/gdscript-setup ()
+  "Connect GDScript buffers to Godot's built-in language server."
+  (require 'lsp-gdscript)
+  ;; A Godot project may be nested inside a larger Git repository.
+  (when-let* ((root (locate-dominating-file default-directory "project.godot")))
+    (setq-local projectile-project-root (expand-file-name root))
+    (setq-local lsp-auto-guess-root t)
+    (setq-local lsp-guess-root-without-session t))
+  (setq-local lsp-file-watch-ignored-directories
+              (cons "[/\\\\]\\.godot\\'" lsp-file-watch-ignored-directories))
+  (lsp-deferred))
+
+(use-package gdscript-mode
+  :mode "\\.gd\\'"
+  ;; The parent hook also runs for gdscript-ts-mode.
+  :hook (gdscript-mode . my/gdscript-setup))
+
+;; Open the project in Godot before connecting; no separate server is needed.
+(with-eval-after-load 'lsp-gdscript
+  (setq lsp-gdscript-port 6005))
 
 ;;; Rust ------------------------------------------------------------------------
 

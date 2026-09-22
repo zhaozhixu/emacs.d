@@ -74,13 +74,13 @@
    '(acp agent-shell anzu bison-mode claude-code-ide clean-aindent-mode
          cmake-mode comment-dwim-2 company csv-mode deno-ts-mode
          diminish dockerfile-mode dtrt-indent duplicate-thing flutter
-         flycheck ggtags go-mode google-c-style helm-gtags helm-lsp
-         helm-projectile iedit indent-bars leetcode lsp-dart
-         lsp-pyright lsp-ui message-view-patch protobuf-mode pyvenv
-         racket-mode rust-mode shell-maker smartparens sql-indent
-         sr-speedbar thrift undo-tree volatile-highlights vterm
-         web-mode window-number ws-butler yaml-mode yasnippet
-         zygospore))
+         flycheck gdscript-mode ggtags go-mode google-c-style
+         helm-gtags helm-lsp helm-projectile iedit indent-bars
+         leetcode lsp-dart lsp-pyright lsp-ui message-view-patch
+         protobuf-mode pyvenv racket-mode rust-mode shell-maker
+         smartparens sql-indent sr-speedbar thrift undo-tree
+         volatile-highlights vterm web-mode window-number ws-butler
+         yaml-mode yasnippet zygospore))
  '(package-vc-selected-packages
    '((claude-code-ide :url
                       "https://github.com/manzaltu/claude-code-ide.el")))

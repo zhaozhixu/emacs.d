@@ -55,6 +55,7 @@
     dockerfile-mode
     racket-mode
     go-mode
+    gdscript-mode
     lsp-mode
     lsp-treemacs
     lsp-pyright
