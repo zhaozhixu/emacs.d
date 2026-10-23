@@ -137,11 +137,9 @@ ACP payloads untouched."
   (require 'agent-shell-auto-retry)
 
   ;; Lark (Feishu) bridge: drive agent-shell sessions from Lark chats.
-  ;; Needs the official lark-cli on PATH (npm install -g @larksuite/cli),
-  ;; configured via `lark-cli config init' and `lark-cli auth login' for
-  ;; a bot app with im:message scope and im.message.receive_v1 over
-  ;; long-connection.  Deny-all until the allowlist is set; see
-  ;; commentary in agent-shell-lark.el.
+  ;; Uses the bot app credentials configured with `lark-cli config init'.
+  ;; Subscribe to im.message.receive_v1 and card.action.trigger over
+  ;; long-connection.  Senders must be in the private allowlist below.
   (require 'agent-shell-lark)
   ;; $$...$$ blocks go out as rendered images (needs node + rsvg-convert
   ;; and a one-time `npm install' in ~/.emacs.d/lark-tools/).

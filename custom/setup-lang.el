@@ -409,7 +409,8 @@
   :defer t
   :config
   (define-key global-map "\C-cl" 'org-store-link)
-  (define-key global-map "\C-ca" 'org-agenda)
+  ;; C-c a is the agent-shell prefix; keep Org loading from replacing it.
+  (define-key global-map (kbd "C-c A") 'org-agenda)
   (define-key global-map "\C-c." 'org-time-stamp)
   (setq org-log-done t)
   (setq org-src-fontify-natively t) ; highlight code block

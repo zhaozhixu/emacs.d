@@ -36,17 +36,17 @@ startup output cannot be mistaken for part of PATH."
       (setenv "PATH" path-from-shell)
       (setq exec-path (split-string path-from-shell path-separator t)))))
 
-;; Keep the PATH inherited by Emacs.  On this Linux host it contains the
-;; active NVM installation (including codex-acp), while `bash --login'
-;; does not.  The helper remains available for platforms that need it.
+;; Preserve inherited paths, including version-managed Node installations.
+;; The login-shell helper remains available for platforms that need it.
 ;; (set-exec-path-from-shell-PATH)
 
-;; Go installs tools such as gopls into ~/go/bin.
-(let ((go-bin (expand-file-name "~/go/bin")))
-  (add-to-list 'exec-path go-bin)
-  (unless (member (file-name-as-directory go-bin)
-                  (parse-colon-path (getenv "PATH")))
-    (setenv "PATH" (concat go-bin path-separator (getenv "PATH")))))
+;; Make user-installed tools available to Emacs and its subprocesses.
+(dolist (user-bin '("~/.local/bin" "~/go/bin"))
+  (let ((bin (expand-file-name user-bin)))
+    (add-to-list 'exec-path bin)
+    (unless (member (file-name-as-directory bin)
+                    (parse-colon-path (getenv "PATH")))
+      (setenv "PATH" (concat bin path-separator (getenv "PATH"))))))
 
 (define-key key-translation-map (kbd "<menu>") #'event-apply-super-modifier) ; super key
 (global-set-key (kbd "C-x C-b") 'ibuffer)
@@ -102,6 +102,16 @@ startup output cannot be mistaken for part of PATH."
       (goto-char (point-max))
       (if window
           (set-window-point window (point-max))))))
+
+(defun copy-current-file-path ()
+  "Copy the current buffer's file path to the clipboard."
+  (interactive)
+  (let ((filename (if (equal major-mode 'dired-mode)
+                      default-directory
+                    (buffer-file-name))))
+    (when filename
+      (kill-new filename)
+      (message "Copied: %s" filename))))
 
 (global-set-key (kbd "<pinch>") 'ignore)
 (global-set-key (kbd "<C-wheel-up>") 'ignore)
