@@ -135,6 +135,7 @@ ACP payloads untouched."
                 :around #'my/agent-shell-tool-output-display-cap))
   (require 'agent-shell-anthropic)
   (require 'agent-shell-auto-retry)
+  (require 'agent-shell-reading)
 
   ;; Lark (Feishu) bridge: drive agent-shell sessions from Lark chats.
   ;; Uses the bot app credentials configured with `lark-cli config init'.

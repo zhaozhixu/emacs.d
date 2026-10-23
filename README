@@ -1,1 +1,9 @@
 My Emacs startup files.
+
+AI-assisted reading
+-------------------
+C-c a e in code or Magit buffers prepares an explanation in agent-shell.
+It uses the active region, otherwise the enclosing function/class or current
+Magit hunk/file diff. Edit the question to request a review, then submit normally.
+C-u starts a new shell; C-u C-u chooses an existing shell. Without a prefix,
+agent-shell uses the most recently accessed shell in the project.
